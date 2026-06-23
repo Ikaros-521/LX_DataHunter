@@ -116,7 +116,7 @@ class BilibiliAdapter(BasePlatformAdapter):
         # 1. 获取用户基本信息
         creator_info = await self._fetch_user_info(mid)
 
-        # 2. 分页获取视频列表
+        # 2. 分页获取视频列表（基础信息）
         items: list[ContentItem] = []
         page = 1
         page_size = min(50, max_items) if max_items > 0 else 50
@@ -139,6 +139,11 @@ class BilibiliAdapter(BasePlatformAdapter):
         # 截断
         if max_items > 0 and len(items) > max_items:
             items = items[:max_items]
+
+        # 3. 批量获取互动数据（点赞、转发、收藏等）
+        if items:
+            logger.info(f"Fetching detailed stats for {len(items)} videos...")
+            await self._enrich_with_stats(items)
 
         logger.info(
             f"Bilibili crawl done: mid={mid}, nickname='{creator_info.nickname}', "
@@ -221,6 +226,13 @@ class BilibiliAdapter(BasePlatformAdapter):
                 # aid 作为 content_id，bvid 存 extra
                 aid = str(v.get("aid", ""))
 
+                # B站搜索API字段映射：
+                #   comment = 弹幕(danmaku), video_review = 评论
+                #   play = 播放量, favorites(如有) = 收藏
+                #   likes/shares/coins 需通过 stat API 批量获取
+                danmaku = v.get("comment", 0)  # 这是弹幕数
+                comments = v.get("video_review", 0)  # 这是评论数
+
                 items.append(ContentItem(
                     content_id=aid,
                     content_type=ContentType.VIDEO,
@@ -229,17 +241,17 @@ class BilibiliAdapter(BasePlatformAdapter):
                     create_time=create_dt,
                     duration_sec=duration,
                     url=f"https://www.bilibili.com/video/av{aid}" if aid else "",
-                    tags=[],  # 列表接口不含标签，需单独请求
+                    tags=[],
                     music_title="",
-                    likes=0,       # 列表接口不含互动数据
-                    comments=v.get("comment", 0),
-                    shares=0,
+                    likes=0,        # 下面批量获取
+                    comments=comments,
+                    shares=0,       # 下面批量获取
                     plays=v.get("play", 0),
-                    collects=0,
+                    collects=v.get("favorites", 0),  # 列表API可能有
                     extra_data={
                         "bvid": v.get("bvid", ""),
                         "aid": aid,
-                        "video_review": v.get("video_review", 0),
+                        "danmaku": danmaku,
                         "description": v.get("description", ""),
                     },
                 ))
@@ -250,6 +262,49 @@ class BilibiliAdapter(BasePlatformAdapter):
         except Exception as e:
             logger.error(f"Failed to fetch video page {page}: {e}")
             return [], False
+
+    async def _enrich_with_stats(self, items: list[ContentItem]):
+        """逐个获取视频详细互动数据（view API 无需 WBI 签名，数据最准确）"""
+        view_url = "https://api.bilibili.com/x/web-interface/view"
+        enriched = 0
+        for item in items:
+            try:
+                resp = Fetcher.get(
+                    view_url,
+                    params={"aid": item.content_id},
+                    headers=BILIBILI_HEADERS,
+                    cookies=_session_cookies if _session_cookies else None,
+                )
+                if resp.status != 200:
+                    continue
+                data = resp.json()
+                if data.get("code") != 0:
+                    continue
+
+                stat = data.get("data", {}).get("stat", {})
+                if stat:
+                    item.likes = stat.get("like", 0)
+                    item.shares = stat.get("share", 0)
+                    item.collects = stat.get("favorite", 0)
+                    item.plays = stat.get("view", item.plays)
+                    item.comments = stat.get("reply", item.comments)
+                    item.extra_data["danmaku"] = stat.get("danmaku", 0)
+                    item.extra_data["coin"] = stat.get("coin", 0)
+
+                    # 视频标签
+                    tags = data.get("data", {}).get("tabs", [])
+                    if tags:
+                        item.tags = [t.get("name", "") for t in tags if t.get("name")]
+
+                enriched += 1
+                # 小延迟避免触发频率限制
+                if enriched % 10 == 0:
+                    logger.info(f"Stats enriched: {enriched}/{len(items)}")
+                    await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.warning(f"Failed to fetch stats for aid={item.content_id}: {e}")
+
+        logger.info(f"Stats enriched: {enriched}/{len(items)} videos")
 
     async def _fetch_follower_count(self, mid: str) -> int:
         """获取粉丝数"""
