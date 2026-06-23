@@ -23,9 +23,10 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-# 关掉 uvicorn.access 的 200 日志轰炸
+# 关掉 uvicorn.access 和 scrapling 的 200 日志轰炸
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+logging.getLogger("scrapling").setLevel(logging.WARNING)
 logger = logging.getLogger("fapai")
 
 
