@@ -22,6 +22,9 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+# 关掉 uvicorn.access 的 200 日志轰炸
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.error").setLevel(logging.INFO)
 logger = logging.getLogger("fapai")
 
 
@@ -42,15 +45,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="FaPai Spider", version="0.1.0", lifespan=lifespan)
 
-# ---- Request logging middleware ----
+# ---- Request logging middleware (仅记录 4xx/5xx，忽略正常请求) ----
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     start = time.time()
     response = await call_next(request)
     elapsed = time.time() - start
-    status = response.status_code
-    level = logging.WARNING if status >= 400 else logging.INFO
-    logger.log(level, f"{request.method} {request.url.path} -> {status} ({elapsed:.2f}s)")
+    if response.status_code >= 400:
+        logger.warning(f"{request.method} {request.url.path} -> {response.status_code} ({elapsed:.2f}s)")
     return response
 
 # ---- Global error handler ----
