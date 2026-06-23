@@ -1,1 +1,5 @@
 *.json
+__pycache__/
+output/
+.douyin_browser_data/
+_test_output/

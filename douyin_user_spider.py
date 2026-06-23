@@ -78,8 +78,8 @@ CHROME_PATHS = [
     "/usr/bin/chromium-browser",
 ]
 
-# 输出
-OUTPUT_DIR = Path(__file__).parent
+# 输出目录
+OUTPUT_DIR = Path(__file__).parent / "output"
 
 
 # ============================================================
@@ -469,19 +469,138 @@ def crawl_with_fetcher(
 
 
 # ============================================================
-# 输出
+# 输出系统 — 按日期分目录存储，便于前端展示和历史对比
 # ============================================================
+#
+# 目录结构:
+#   output/
+#   ├── index.json                  # 全局索引，列出所有抓取会话
+#   ├── 2026-06-23/                 # 按日期分目录
+#   │   ├── <sec_uid>_143052.json   # 单次抓取结果 (sec_uid_时分秒)
+#   │   └── <sec_uid>_180030.json
+#   ├── 2026-06-24/
+#   │   └── ...
+#   └── latest/                     # 每个用户最新数据的镜像
+#       └── <sec_uid>.json          # 前端可直接读取此文件获取最新数据
+
+
+def _now() -> datetime:
+    return datetime.now()
+
+
+def _date_dir(dt: datetime) -> str:
+    """返回日期目录名，如 '2026-06-23'"""
+    return dt.strftime("%Y-%m-%d")
+
+
+def _time_slug(dt: datetime) -> str:
+    """返回时间标识，如 '143052' (时分秒)"""
+    return dt.strftime("%H%M%S")
+
+
+def update_index(
+    sec_uid: str,
+    session_file: str,
+    author_nickname: str,
+    video_count: int,
+    engagement: Dict[str, int],
+    dt: datetime,
+):
+    """
+    更新全局索引文件 output/index.json。
+
+    索引记录每次抓取的元信息，前端可用此文件展示抓取历史、
+    对比不同时间点的数据变化。
+    """
+    index_path = OUTPUT_DIR / "index.json"
+
+    # 读取已有索引
+    if index_path.exists():
+        with open(index_path, "r", encoding="utf-8") as f:
+            index = json.load(f)
+    else:
+        index = {
+            "description": "抖音爬虫抓取索引 — 记录所有抓取会话",
+            "created": _now().strftime("%Y-%m-%d %H:%M:%S"),
+            "sessions": [],
+        }
+
+    # 新会话条目
+    entry = {
+        "session_id": f"{_date_dir(dt)}_{_time_slug(dt)}_{sec_uid[:8]}",
+        "date": _date_dir(dt),
+        "time": dt.strftime("%H:%M:%S"),
+        "timestamp": dt.strftime("%Y-%m-%d %H:%M:%S"),
+        "sec_uid": sec_uid,
+        "author": author_nickname,
+        "video_count": video_count,
+        "engagement": engagement,
+        "file": session_file,
+    }
+
+    # 插入到列表头部 (最新的在前)
+    index["sessions"].insert(0, entry)
+    index["updated"] = dt.strftime("%Y-%m-%d %H:%M:%S")
+    index["total_sessions"] = len(index["sessions"])
+
+    # 按 sec_uid 汇总统计
+    users_summary = {}
+    for s in index["sessions"]:
+        uid = s["sec_uid"]
+        if uid not in users_summary:
+            users_summary[uid] = {
+                "sec_uid": uid,
+                "author": s["author"],
+                "first_crawl": s["timestamp"],
+                "last_crawl": s["timestamp"],
+                "total_sessions": 0,
+                "latest_video_count": s["video_count"],
+                "latest_engagement": s["engagement"],
+            }
+        users_summary[uid]["total_sessions"] += 1
+        # 最新的 session 在前面，所以只更新 last_crawl
+        if s["timestamp"] > users_summary[uid]["last_crawl"]:
+            users_summary[uid]["last_crawl"] = s["timestamp"]
+            users_summary[uid]["latest_video_count"] = s["video_count"]
+            users_summary[uid]["latest_engagement"] = s["engagement"]
+    index["users"] = list(users_summary.values())
+
+    with open(index_path, "w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, indent=2)
+
+    return index_path
+
 
 def save_results(
-    videos: List[Dict], sec_uid: str, output_path: Optional[Path] = None
-):
-    """保存为 JSON"""
-    if output_path is None:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = OUTPUT_DIR / f"douyin_{sec_uid[:12]}_{ts}.json"
+    videos: List[Dict],
+    sec_uid: str,
+    dt: Optional[datetime] = None,
+) -> Path:
+    """
+    保存抓取结果到 output/ 目录，按日期分文件夹。
+
+    输出结构:
+      output/
+        └── 2026-06-23/
+            └── <sec_uid>_143052.json
+
+    同时:
+      1. 更新 output/index.json 索引
+      2. 更新 output/latest/<sec_uid>.json (前端直接读取的最新数据)
+
+    Args:
+        videos: 视频列表
+        sec_uid: 用户 sec_uid
+        dt: 抓取时间 (默认当前时间)
+
+    Returns:
+        保存的文件路径
+    """
+    if dt is None:
+        dt = _now()
 
     # 汇总统计
-    total = {
+    engagement = {
         "likes": sum(v["statistics"]["likes"] for v in videos),
         "comments": sum(v["statistics"]["comments"] for v in videos),
         "shares": sum(v["statistics"]["shares"] for v in videos),
@@ -489,21 +608,191 @@ def save_results(
         "collects": sum(v["statistics"]["collects"] for v in videos),
     }
 
+    # 作者昵称 (取第一个视频的作者)
+    author_nickname = videos[0]["author"]["nickname"] if videos else "unknown"
+
+    # 计算与上次抓取的数据变化 (如果有历史数据)
+    delta = _compute_delta(sec_uid, videos, engagement)
+
+    # ---- 构建结果 JSON ----
     result = {
-        "crawl_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "sec_uid": sec_uid,
-        "user_url": f"https://www.douyin.com/user/{sec_uid}",
-        "total_videos": len(videos),
-        "total_engagement": total,
+        "meta": {
+            "crawl_time": dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "crawl_timestamp": int(dt.timestamp()),
+            "date": _date_dir(dt),
+            "time": dt.strftime("%H:%M:%S"),
+            "sec_uid": sec_uid,
+            "author": author_nickname,
+            "user_url": f"https://www.douyin.com/user/{sec_uid}",
+            "total_videos": len(videos),
+            "total_engagement": engagement,
+            "delta": delta,  # 与上次抓取的对比
+        },
         "videos": videos,
     }
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
+    # ---- 保存到日期目录 ----
+    date_folder = OUTPUT_DIR / _date_dir(dt)
+    date_folder.mkdir(parents=True, exist_ok=True)
+
+    filename = f"{sec_uid[:12]}_{_time_slug(dt)}.json"
+    file_path = date_folder / filename
+
+    with open(file_path, "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
-    print(f"\n💾 结果已保存: {output_path} ({len(videos)} 个视频)")
-    return output_path
+    # ---- 更新 latest/ 镜像 ----
+    latest_dir = OUTPUT_DIR / "latest"
+    latest_dir.mkdir(parents=True, exist_ok=True)
+    latest_file = latest_dir / f"{sec_uid[:12]}.json"
+
+    # latest 里也加上简化的元信息供前端方便读取
+    latest_result = dict(result)
+    latest_result["meta"]["latest_update"] = dt.strftime("%Y-%m-%d %H:%M:%S")
+    with open(latest_file, "w", encoding="utf-8") as f:
+        json.dump(latest_result, f, ensure_ascii=False, indent=2)
+
+    # ---- 更新全局索引 ----
+    relative_path = f"{_date_dir(dt)}/{filename}"
+    update_index(
+        sec_uid=sec_uid,
+        session_file=relative_path,
+        author_nickname=author_nickname,
+        video_count=len(videos),
+        engagement=engagement,
+        dt=dt,
+    )
+
+    print(f"\n💾 结果已保存:")
+    print(f"   📄 {file_path}")
+    print(f"   📋 索引: {OUTPUT_DIR / 'index.json'}")
+    print(f"   ⚡ 最新: {latest_file}")
+    print(f"   📊 {len(videos)} 个视频  |  "
+          f"👍 {engagement['likes']:,}  💬 {engagement['comments']:,}  "
+          f"🔄 {engagement['shares']:,}")
+
+    if delta:
+        print(f"   📈 较上次变化: ", end="")
+        parts = []
+        if delta.get("new_videos"):
+            parts.append(f"+{delta['new_videos']} 新视频")
+        likes_d = delta.get("likes_delta", 0)
+        if likes_d:
+            parts.append(f"👍 {'+' if likes_d > 0 else ''}{likes_d:,}")
+        comments_d = delta.get("comments_delta", 0)
+        if comments_d:
+            parts.append(f"💬 {'+' if comments_d > 0 else ''}{comments_d:,}")
+        print(", ".join(parts) if parts else "无变化")
+
+    return file_path
+
+
+def _compute_delta(
+    sec_uid: str,
+    current_videos: List[Dict],
+    current_engagement: Dict[str, int],
+) -> Optional[Dict[str, Any]]:
+    """
+    对比上一次抓取数据，计算变化量。
+
+    通过读取 output/latest/<sec_uid>.json 获取上次数据，
+    计算出新增视频数、互动增长量等指标。
+    前端可用此数据展示增长趋势。
+    """
+    latest_file = OUTPUT_DIR / "latest" / f"{sec_uid[:12]}.json"
+    if not latest_file.exists():
+        return None
+
+    try:
+        with open(latest_file, "r", encoding="utf-8") as f:
+            prev = json.load(f)
+    except Exception:
+        return None
+
+    prev_meta = prev.get("meta", {})
+    prev_videos = prev.get("videos", [])
+    prev_engagement = prev_meta.get("total_engagement", {})
+
+    # 新视频 (之前没见过的 aweme_id)
+    prev_ids = {v.get("aweme_id") for v in prev_videos}
+    current_ids = {v.get("aweme_id") for v in current_videos}
+    new_ids = current_ids - prev_ids
+
+    # 互动增长
+    delta = {
+        "previous_crawl": prev_meta.get("crawl_time", "unknown"),
+        "new_videos": len(new_ids),
+        "removed_videos": len(prev_ids - current_ids),
+        "likes_delta": current_engagement.get("likes", 0) - prev_engagement.get("likes", 0),
+        "comments_delta": current_engagement.get("comments", 0) - prev_engagement.get("comments", 0),
+        "shares_delta": current_engagement.get("shares", 0) - prev_engagement.get("shares", 0),
+        "plays_delta": current_engagement.get("plays", 0) - prev_engagement.get("plays", 0),
+        "collects_delta": current_engagement.get("collects", 0) - prev_engagement.get("collects", 0),
+    }
+
+    return delta
+
+
+def load_history(sec_uid: str) -> List[Dict]:
+    """
+    加载指定用户的历史抓取数据。
+
+    从 index.json 中找到该用户的所有 session，
+    按时间排序返回。前端可用此函数展示历史趋势图。
+
+    Args:
+        sec_uid: 用户 sec_uid
+
+    Returns:
+        历史 session 列表 (按时间倒序)
+    """
+    index_path = OUTPUT_DIR / "index.json"
+    if not index_path.exists():
+        return []
+
+    with open(index_path, "r", encoding="utf-8") as f:
+        index = json.load(f)
+
+    sessions = [
+        s for s in index.get("sessions", [])
+        if s["sec_uid"] == sec_uid
+    ]
+
+    # 如果 index 中找不到，尝试直接扫描目录
+    if not sessions:
+        sessions = _scan_user_sessions(sec_uid)
+
+    return sessions
+
+
+def _scan_user_sessions(sec_uid: str) -> List[Dict]:
+    """扫描 output 目录查找用户的历史数据文件"""
+    sessions = []
+    prefix = sec_uid[:12]
+
+    for date_dir in sorted(OUTPUT_DIR.glob("*/"), reverse=True):
+        if date_dir.name in ("latest",):
+            continue
+        for f in sorted(date_dir.glob(f"{prefix}_*.json"), reverse=True):
+            try:
+                with open(f, "r", encoding="utf-8") as fp:
+                    data = json.load(fp)
+                meta = data.get("meta", {})
+                sessions.append({
+                    "session_id": f"{date_dir.name}_{f.stem}",
+                    "date": date_dir.name,
+                    "time": meta.get("time", ""),
+                    "timestamp": meta.get("crawl_time", ""),
+                    "sec_uid": sec_uid,
+                    "author": meta.get("author", ""),
+                    "video_count": meta.get("total_videos", 0),
+                    "engagement": meta.get("total_engagement", {}),
+                    "file": f"{date_dir.name}/{f.name}",
+                })
+            except Exception:
+                continue
+
+    return sessions
 
 
 def print_results(videos: List[Dict]):

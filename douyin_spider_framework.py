@@ -17,22 +17,22 @@ Douyin Demo Spider (Spider 框架版) — 使用 Scrapling Spider 类
 
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from scrapling.spiders import Spider, Request
-from scrapling import Response
+from scrapling.engines.toolbelt.custom import Response
 
 
 # ============================================================
 # 配置
 # ============================================================
 
-TARGET_SEC_UID = "MS4wLjABAAAAqB4XmlEya_5Ht2tGknk00A7EFExP7XBO5oCE4C16Q5A"
-OUTPUT_FILE = Path(__file__).parent / "douyin_videos_spider.json"
+TARGET_SEC_UID = "MS4wLjABAAAAuWZZlvIC2SHOWYQ4LkdxH1zcYBZWtVtARoh9wCpYsPYA3TeZ2b8g7p4hBQOEIj3y"
+OUTPUT_DIR = Path(__file__).parent / "output"
+OUTPUT_FILE = OUTPUT_DIR / "douyin_videos_spider.json"
 
 
 # ============================================================
@@ -82,11 +82,11 @@ class DouyinUserSpider(Spider):
         DynamicSession 会启动一个真实的 Chromium 浏览器来加载页面，
         执行 JavaScript，然后返回渲染后的 HTML。
         """
-        from scrapling.fetchers import DynamicSession
+        from scrapling.fetchers import AsyncDynamicSession
 
         manager.add(
             "default",
-            DynamicSession(
+            AsyncDynamicSession(
                 headless=True,          # 无头模式
                 network_idle=True,      # 等待网络空闲
                 timeout=30000,          # 30秒超时
@@ -302,25 +302,26 @@ class DouyinUserSpider(Spider):
 # 入口
 # ============================================================
 
-async def main():
-    """异步运行爬虫"""
+def main():
+    """运行爬虫"""
     spider = DouyinUserSpider(
         sec_uid=TARGET_SEC_UID,
         max_videos=30,
         # crawldir="./douyin_checkpoints",  # 开启暂停/恢复功能
     )
 
-    # spider.run() 内部会调用 asyncio.run()
-    # 如果你在已有 event loop 中，直接调用 await spider.__run()
-    result = await spider.__run()
+    # spider.start() 是官方入口，内部通过 anyio 处理异步
+    result = spider.start()
 
+    stats = result.stats
     print(f"\n爬取统计:")
-    print(f"  请求数: {result.stats.get('requests', 0)}")
-    print(f"  成功: {result.stats.get('successful', 0)}")
-    print(f"  失败: {result.stats.get('failed', 0)}")
-    print(f"  产出: {len(result.items)} 条数据")
+    print(f"  请求数: {stats.requests_count}")
+    print(f"  成功: {stats.response_status_count.get('status_200', 0)}")
+    print(f"  失败: {stats.failed_requests_count}")
+    print(f"  产出: {len(result.items)} 条数据 / {stats.items_scraped} 条入库")
+    print(f"  耗时: {stats.elapsed_seconds:.1f}s")
     print(f"  暂停: {result.paused}")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
