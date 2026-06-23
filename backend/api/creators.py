@@ -198,6 +198,7 @@ async def _run_crawl(creator: MonitoredCreator, session_id: int):
                 trigger_type=TriggerType.MANUAL,
                 max_items=50,
                 progress_callback=on_progress,
+                existing_session_id=session_id,
             )
             logger.info(f"Background crawl completed: session_id={session_id}")
         except Exception as e:

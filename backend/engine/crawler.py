@@ -19,8 +19,13 @@ async def crawl_creator(
     max_items: int = 50,
     headless: bool = True,
     progress_callback: Any = None,
+    existing_session_id: Optional[int] = None,
 ) -> CrawlSession:
-    """Execute a crawl for a creator. Creates session, writes results to DB."""
+    """Execute a crawl for a creator.
+
+    如果提供了 existing_session_id，复用已有的 session（API 层预创建的），
+    否则新建一个 session（定时调度等场景）。
+    """
     adapter = get_adapter(creator.platform)
 
     logger.info(
@@ -28,17 +33,23 @@ async def crawl_creator(
         f"uid={creator.platform_uid}, trigger={trigger_type.value}, max_items={max_items}"
     )
 
-    # 1. Create session — platform/trigger_type/status are String columns, use .value for enums
-    session = CrawlSession(
-        creator_id=creator.id,
-        platform=creator.platform,  # already a string from DB
-        trigger_type=trigger_type.value,
-        status=SessionStatus.RUNNING.value,
-    )
-    db.add(session)
-    await db.commit()
-    await db.refresh(session)
-    logger.info(f"Session created: id={session.id}")
+    # 1. Create or reuse session
+    if existing_session_id:
+        session = await db.get(CrawlSession, existing_session_id)
+        if not session:
+            raise ValueError(f"Session {existing_session_id} not found")
+        logger.info(f"Reusing existing session: id={session.id}")
+    else:
+        session = CrawlSession(
+            creator_id=creator.id,
+            platform=creator.platform,
+            trigger_type=trigger_type.value,
+            status=SessionStatus.RUNNING.value,
+        )
+        db.add(session)
+        await db.commit()
+        await db.refresh(session)
+        logger.info(f"Session created: id={session.id}")
 
     # 2. Run crawler
     try:
