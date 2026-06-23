@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Table, Button, Modal, Select, Switch, Space, Popconfirm, message } from 'antd';
-import { ClockCircleOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
+import { ClockCircleOutlined, EditOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client from '../api/client';
 import PlatformTag from '../components/PlatformTag';
@@ -10,9 +10,12 @@ import type { Schedule } from '../api/queries';
 export default function ScheduleManager() {
   const qc = useQueryClient();
   const [editOpen, setEditOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
   const [editInterval, setEditInterval] = useState(360);
   const [editEnabled, setEditEnabled] = useState(true);
+  const [addCreatorId, setAddCreatorId] = useState<number | null>(null);
+  const [addInterval, setAddInterval] = useState(360);
 
   const { data: schedules, isLoading } = useQuery<Schedule[]>({
     queryKey: ['schedules'],
@@ -44,11 +47,26 @@ export default function ScheduleManager() {
     setEditOpen(true);
   };
 
+  // 还没配置定时的创作者
+  const scheduledIds = new Set((schedules || []).map(s => s.creator_id));
+  const unscheduledCreators = useMemo(() =>
+    (creatorsData?.items || []).filter((c: any) => !scheduledIds.has(c.id)),
+    [creatorsData, scheduledIds]
+  );
+
   const handleSave = () => {
     if (!editingSchedule) return;
     upsertMut.mutate({
       creatorId: editingSchedule.creator_id,
       data: { interval_minutes: editInterval, enabled: editEnabled },
+    });
+  };
+
+  const handleAdd = () => {
+    if (!addCreatorId) { message.warning('请选择创作者'); return; }
+    upsertMut.mutate({
+      creatorId: addCreatorId,
+      data: { interval_minutes: addInterval, enabled: true },
     });
   };
 
@@ -112,7 +130,36 @@ export default function ScheduleManager() {
         系统每分钟检查一次到期任务，自动执行爬取。配置间隔从上次执行完成开始计算。
       </div>
 
+      <Button type="primary" icon={<PlusOutlined />}
+        onClick={() => { setAddOpen(true); setAddCreatorId(null); setAddInterval(360); }}
+        disabled={unscheduledCreators.length === 0}
+        style={{ marginBottom: 16 }}>
+        添加定时任务
+      </Button>
+      {unscheduledCreators.length === 0 && (
+        <span style={{ color: '#888', marginLeft: 8, fontSize: 13 }}>所有创作者已配置定时</span>
+      )}
+
       <Table dataSource={schedules || []} columns={columns} rowKey="id" loading={isLoading} size="small" />
+
+      <Modal title="添加定时任务" open={addOpen} onOk={handleAdd}
+        onCancel={() => setAddOpen(false)} confirmLoading={upsertMut.isPending}>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 8 }}>选择创作者</div>
+          <Select showSearch placeholder="搜索创作者" value={addCreatorId} onChange={setAddCreatorId}
+            style={{ width: '100%' }}
+            filterOption={(input, option) => (option?.label as string || '').includes(input)}
+            options={unscheduledCreators.map((c: any) => ({
+              label: `${c.nickname || c.platform_uid} (${c.platform})`,
+              value: c.id,
+            }))} />
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 8 }}>执行间隔</div>
+          <Select value={addInterval} onChange={setAddInterval}
+            options={intervalOptions} style={{ width: '100%' }} />
+        </div>
+      </Modal>
 
       <Modal title="编辑定时任务" open={editOpen} onOk={handleSave}
         onCancel={() => setEditOpen(false)} confirmLoading={upsertMut.isPending}>
