@@ -1,13 +1,13 @@
 """Schedule configuration endpoints."""
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 logger = logging.getLogger("fapai.schedules")
 from backend.database import get_db
-from backend.models import ScheduleConfig, MonitoredCreator
+from backend.models import ScheduleConfig, MonitoredCreator, beijing_now
 from backend.schemas import ScheduleUpsert, ScheduleResponse
 
 router = APIRouter(prefix="/api/v1/schedules", tags=["schedules"])
@@ -38,14 +38,14 @@ async def upsert_schedule(
     if existing:
         existing.interval_minutes = body.interval_minutes
         existing.enabled = body.enabled
-        existing.next_run_at = datetime.utcnow() + timedelta(minutes=body.interval_minutes)
+        existing.next_run_at = beijing_now() + timedelta(minutes=body.interval_minutes)
         schedule = existing
     else:
         schedule = ScheduleConfig(
             creator_id=creator_id,
             interval_minutes=body.interval_minutes,
             enabled=body.enabled,
-            next_run_at=datetime.utcnow() + timedelta(minutes=body.interval_minutes),
+            next_run_at=beijing_now() + timedelta(minutes=body.interval_minutes),
         )
         db.add(schedule)
 

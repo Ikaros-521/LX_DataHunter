@@ -1,12 +1,20 @@
 """SQLAlchemy ORM models.  JSON 列使用 SQLAlchemy JSON 类型，自动序列化/反序列化。"""
 import enum
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import (
     Column, Integer, String, Text, Float, Boolean, JSON,
     DateTime, ForeignKey, UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
+
+# 北京时间 (UTC+8)
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def beijing_now() -> datetime:
+    """返回当前北京时间"""
+    return datetime.now(BEIJING_TZ).replace(tzinfo=None)
 
 
 class Base(DeclarativeBase):
@@ -49,8 +57,8 @@ class MonitoredCreator(Base):
     avatar_url = Column(String(500), default="")
     follower_count = Column(Integer, default=0)
     extra_info = Column(JSON, default=dict)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=beijing_now)
+    updated_at = Column(DateTime, default=beijing_now, onupdate=beijing_now)
 
     sessions = relationship("CrawlSession", back_populates="creator", cascade="all, delete-orphan")
     schedule = relationship("ScheduleConfig", back_populates="creator", uselist=False, cascade="all, delete-orphan")
@@ -65,7 +73,7 @@ class CrawlSession(Base):
     trigger_type = Column(String(20), nullable=False, default="manual")
     status = Column(String(20), nullable=False, default="running")
     error_message = Column(Text, default="")
-    started_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, default=beijing_now)
     finished_at = Column(DateTime, nullable=True)
     total_contents = Column(Integer, default=0)
     engagement_total = Column(JSON, default=dict)
@@ -121,5 +129,5 @@ class PlatformCredential(Base):
     name = Column(String(255), default="")  # 备注名
     cookie_str = Column(Text, default="")    # 原始 Cookie 字符串
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=beijing_now)
+    updated_at = Column(DateTime, default=beijing_now, onupdate=beijing_now)

@@ -5,7 +5,7 @@ from typing import Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import (
-    MonitoredCreator, CrawlSession, ContentSnapshot, SessionStatus, TriggerType,
+    MonitoredCreator, CrawlSession, ContentSnapshot, SessionStatus, TriggerType, beijing_now,
 )
 from .platforms import get_adapter, ContentItem, CreatorInfo
 
@@ -76,7 +76,7 @@ async def crawl_creator(
         logger.error(f"Crawl failed: {e}", exc_info=True)
         session.status = SessionStatus.FAILED.value
         session.error_message = str(e)[:500]
-        session.finished_at = datetime.utcnow()
+        session.finished_at = beijing_now()
         await db.commit()
         raise
 
@@ -93,7 +93,7 @@ async def crawl_creator(
         creator.follower_count = creator_info.follower_count
     if creator_info.extra_info:
         creator.extra_info = creator_info.extra_info
-    creator.updated_at = datetime.utcnow()
+    creator.updated_at = beijing_now()
 
     # 4. Write content snapshots
     logger.info(f"Writing {len(items)} content snapshots to DB...")
@@ -157,7 +157,7 @@ async def crawl_creator(
 
     # 6. Finalize session
     session.status = SessionStatus.COMPLETED.value
-    session.finished_at = datetime.utcnow()
+    session.finished_at = beijing_now()
     session.total_contents = len(items)
     session.engagement_total = engagement
     session.delta_from_prev = delta

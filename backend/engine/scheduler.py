@@ -1,10 +1,10 @@
 """APScheduler lifecycle management."""
-from datetime import datetime, timedelta
+from datetime import timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select
 from backend.database import AsyncSessionLocal
-from backend.models import ScheduleConfig, MonitoredCreator, CrawlSession, SessionStatus, TriggerType
+from backend.models import ScheduleConfig, MonitoredCreator, CrawlSession, SessionStatus, TriggerType, beijing_now
 from .crawler import crawl_creator
 
 scheduler = AsyncIOScheduler()
@@ -13,7 +13,7 @@ scheduler = AsyncIOScheduler()
 async def run_scheduled_check():
     """Check for due schedules and execute them."""
     async with AsyncSessionLocal() as db:
-        now = datetime.utcnow()
+        now = beijing_now()
         result = await db.execute(
             select(ScheduleConfig).where(
                 ScheduleConfig.enabled == True,
@@ -46,8 +46,8 @@ async def run_scheduled_check():
             except Exception:
                 pass
             finally:
-                schedule.last_run_at = datetime.utcnow()
-                schedule.next_run_at = datetime.utcnow() + timedelta(minutes=schedule.interval_minutes)
+                schedule.last_run_at = beijing_now()
+                schedule.next_run_at = beijing_now() + timedelta(minutes=schedule.interval_minutes)
                 await db.commit()
 
 

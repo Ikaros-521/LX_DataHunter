@@ -50,7 +50,8 @@ async def lifespan(app: FastAPI):
         )
         orphan_ids = result.scalars().all()
         if orphan_ids:
-            now = datetime.utcnow()
+            from backend.models import beijing_now
+            now = beijing_now()
             await conn.execute(
                 sa_update(CrawlSession)
                 .where(CrawlSession.id.in_(orphan_ids))
