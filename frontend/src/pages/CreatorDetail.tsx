@@ -50,7 +50,6 @@ export default function CreatorDetail() {
         }
         bordered
         column={{ xs: 1, sm: 2 }}
-        loading={isLoading}
         extra={
           <Button type="primary" icon={<ThunderboltOutlined />}
             loading={crawlMutation.isPending}

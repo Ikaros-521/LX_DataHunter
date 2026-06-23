@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Table, Button, Modal, Form, Select, Input, Space, Popconfirm, message, Tag } from 'antd';
-import { PlusOutlined, ThunderboltOutlined, ClockCircleOutlined } from '@ant-design/icons';
+import { PlusOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import PlatformTag from '../components/PlatformTag';
 import { useCreators, useAddCreator, useDeleteCreator, useTriggerCrawl, usePlatforms } from '../api/queries';

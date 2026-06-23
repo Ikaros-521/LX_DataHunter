@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Input, Select, DatePicker, Space, Button, message } from 'antd';
 import { SearchOutlined, ExportOutlined } from '@ant-design/icons';
-import PlatformTag from '../components/PlatformTag';
 import ContentTable from '../components/ContentTable';
 import { useContents, useCreators, usePlatforms } from '../api/queries';
 import dayjs from 'dayjs';

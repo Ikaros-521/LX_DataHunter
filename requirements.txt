@@ -1,0 +1,8 @@
+fastapi>=0.109.0
+uvicorn[standard]>=0.34.0
+sqlalchemy>=2.0
+aiosqlite>=0.20.0
+apscheduler>=3.10.0
+pydantic>=2.0
+pydantic-settings>=2.0
+scrapling[fetchers]>=0.4.9

@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
+from sqlalchemy.orm import selectinload
 from backend.database import get_db
 from backend.models import MonitoredCreator, CrawlSession, SessionStatus, TriggerType
 from backend.schemas import (
@@ -74,7 +75,7 @@ async def add_creator(body: CreatorCreate, db: AsyncSession = Depends(get_db)):
     )
     db.add(creator)
     await db.commit()
-    await db.refresh(creator)
+    await db.refresh(creator, ["schedule"])
     return await _to_response(creator, db)
 
 @router.get("", response_model=CreatorListResponse)
@@ -85,7 +86,7 @@ async def list_creators(
     page_size: int = 20,
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(MonitoredCreator)
+    stmt = select(MonitoredCreator).options(selectinload(MonitoredCreator.schedule))
     count_stmt = select(func.count(MonitoredCreator.id))
 
     if platform:
@@ -104,7 +105,9 @@ async def list_creators(
 
 @router.get("/{creator_id}", response_model=CreatorResponse)
 async def get_creator(creator_id: int, db: AsyncSession = Depends(get_db)):
-    creator = await db.get(MonitoredCreator, creator_id)
+    stmt = select(MonitoredCreator).options(selectinload(MonitoredCreator.schedule)).where(MonitoredCreator.id == creator_id)
+    result = await db.execute(stmt)
+    creator = result.scalar_one_or_none()
     if not creator:
         raise HTTPException(404, "Creator not found")
     return await _to_response(creator, db)
