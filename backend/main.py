@@ -8,6 +8,7 @@ from .api.platforms import router as platforms_router
 from .api.sessions import router as sessions_router
 from .api.contents import router as contents_router
 from .api.schedules import router as schedules_router
+from .api.ws import router as ws_router
 from .config import settings
 from .database import engine
 from .models import Base
@@ -15,9 +16,12 @@ from .models import Base
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from .engine.scheduler import start_scheduler, stop_scheduler
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    start_scheduler()
     yield
+    stop_scheduler()
     await engine.dispose()
 
 
@@ -28,6 +32,7 @@ app.include_router(platforms_router)
 app.include_router(sessions_router)
 app.include_router(contents_router)
 app.include_router(schedules_router)
+app.include_router(ws_router)
 
 # Will mount static files in later tasks
 
