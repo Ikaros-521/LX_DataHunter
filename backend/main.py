@@ -1,6 +1,7 @@
 """FastAPI application entry point."""
 import logging
 import time
+from datetime import datetime
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, Request
@@ -31,9 +32,37 @@ logger = logging.getLogger("fapai")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from .engine.scheduler import start_scheduler, stop_scheduler
+    from .models import CrawlSession, SessionStatus
+    from sqlalchemy import select, update as sa_update
+
     logger.info("Starting FaPai Spider...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+        # ---- 恢复机制：将上次中断的 running 任务标记为 interrupted ----
+        result = await conn.execute(
+            select(CrawlSession.id).where(
+                CrawlSession.status == SessionStatus.RUNNING.value
+            )
+        )
+        orphan_ids = result.scalars().all()
+        if orphan_ids:
+            now = datetime.utcnow()
+            await conn.execute(
+                sa_update(CrawlSession)
+                .where(CrawlSession.id.in_(orphan_ids))
+                .values(
+                    status=SessionStatus.FAILED.value,
+                    error_message="Server restarted — crawl interrupted",
+                    finished_at=now,
+                )
+            )
+            logger.warning(
+                f"Recovered {len(orphan_ids)} interrupted session(s): {orphan_ids}"
+            )
+        else:
+            logger.info("No interrupted sessions found")
+
     logger.info("Database tables ensured")
     start_scheduler()
     logger.info("Scheduler started")
