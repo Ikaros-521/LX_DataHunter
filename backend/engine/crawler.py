@@ -1,4 +1,5 @@
 """Crawler orchestrator: ties together adapter, DB, and WebSocket."""
+import logging
 from datetime import datetime
 from typing import Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,6 +8,8 @@ from backend.models import (
     MonitoredCreator, CrawlSession, ContentSnapshot, SessionStatus, TriggerType,
 )
 from .platforms import get_adapter, ContentItem, CreatorInfo
+
+logger = logging.getLogger("fapai.crawler")
 
 
 async def crawl_creator(
@@ -20,6 +23,11 @@ async def crawl_creator(
     """Execute a crawl for a creator. Creates session, writes results to DB."""
     adapter = get_adapter(creator.platform)
 
+    logger.info(
+        f"Starting crawl: creator_id={creator.id}, platform={creator.platform.value}, "
+        f"uid={creator.platform_uid}, trigger={trigger_type.value}, max_items={max_items}"
+    )
+
     # 1. Create session
     session = CrawlSession(
         creator_id=creator.id,
@@ -30,16 +38,20 @@ async def crawl_creator(
     db.add(session)
     await db.commit()
     await db.refresh(session)
+    logger.info(f"Session created: id={session.id}")
 
     # 2. Run crawler
     try:
+        logger.info(f"Calling adapter.crawl_creator() for platform={creator.platform.value}...")
         creator_info, items = await adapter.crawl_creator(
             platform_uid=creator.platform_uid,
             max_items=max_items,
             headless=headless,
             progress_callback=progress_callback,
         )
+        logger.info(f"Adapter returned: {len(items)} items, creator='{creator_info.nickname}'")
     except Exception as e:
+        logger.error(f"Crawl failed: {e}", exc_info=True)
         session.status = SessionStatus.FAILED.value
         session.error_message = str(e)[:500]
         session.finished_at = datetime.utcnow()
@@ -48,6 +60,8 @@ async def crawl_creator(
 
     # 3. Update creator info
     if creator_info.nickname:
+        logger.info(f"Updating creator info: nickname='{creator_info.nickname}', "
+                     f"followers={creator_info.follower_count}")
         creator.nickname = creator_info.nickname
     if creator_info.signature:
         creator.signature = creator_info.signature
@@ -60,6 +74,7 @@ async def crawl_creator(
     creator.updated_at = datetime.utcnow()
 
     # 4. Write content snapshots
+    logger.info(f"Writing {len(items)} content snapshots to DB...")
     for item in items:
         snap = ContentSnapshot(
             session_id=session.id,
@@ -83,8 +98,11 @@ async def crawl_creator(
 
     # 5. Compute engagement and delta
     engagement = _sum_engagement(items)
+    logger.info(
+        f"Engagement total: likes={engagement['likes']}, comments={engagement['comments']}, "
+        f"shares={engagement['shares']}, plays={engagement['plays']}"
+    )
 
-    # Find previous completed session for delta
     from sqlalchemy import select, desc
     prev_stmt = (
         select(CrawlSession)
@@ -111,6 +129,9 @@ async def crawl_creator(
             "plays_delta": engagement.get("plays", 0) - prev_eng.get("plays", 0),
             "collects_delta": engagement.get("collects", 0) - prev_eng.get("collects", 0),
         }
+        logger.info(f"Delta from previous session: {delta}")
+    else:
+        logger.info("No previous session — first crawl for this creator")
 
     # 6. Finalize session
     session.status = SessionStatus.COMPLETED.value
@@ -121,6 +142,15 @@ async def crawl_creator(
 
     await db.commit()
     await db.refresh(session)
+
+    logger.info(f"Crawl completed: session_id={session.id}, total_contents={len(items)}")
+
+    # 7. Final progress update
+    if progress_callback:
+        try:
+            await progress_callback(len(items), len(items), "completed")
+        except Exception:
+            pass
 
     return session
 

@@ -175,21 +175,31 @@ async def trigger_crawl(
     return {"session_id": session.id, "message": "Crawl started"}
 
 async def _run_crawl(creator: MonitoredCreator, session_id: int):
-    """Background task wrapper."""
+    """Background task wrapper with WebSocket progress broadcasting."""
     from backend.database import AsyncSessionLocal
+    from backend.api.ws import broadcast_progress
+
     logger.info(f"Background crawl starting: session_id={session_id}")
+
+    async def on_progress(current: int, total: int, status: str):
+        """Push progress to WebSocket clients."""
+        await broadcast_progress(session_id, current, total, status)
+        logger.info(f"Crawl progress: session_id={session_id}, current={current}, total={total}, status={status}")
+
     async with AsyncSessionLocal() as db:
         c = await db.get(MonitoredCreator, creator.id)
-        session = await db.get(CrawlSession, session_id)
-        if not c or not session:
-            logger.error(f"Background crawl failed: creator or session not found")
+        if not c:
+            logger.error(f"Background crawl failed: creator id={creator.id} not found")
             return
         try:
             await crawl_creator(
                 creator=c,
                 db=db,
                 trigger_type=TriggerType.MANUAL,
+                max_items=50,
+                progress_callback=on_progress,
             )
             logger.info(f"Background crawl completed: session_id={session_id}")
         except Exception as e:
             logger.error(f"Background crawl failed: session_id={session_id}, error={e}", exc_info=True)
+            await broadcast_progress(session_id, 0, 0, "failed")

@@ -1,7 +1,7 @@
 """Douyin platform adapter — wraps Playwright-based crawler."""
 import asyncio
+import logging
 import os
-import json
 from datetime import datetime
 from typing import Any, Optional
 
@@ -9,6 +9,8 @@ from backend.models import Platform, ContentType
 from .base import (
     BasePlatformAdapter, ContentItem, CreatorInfo, ProgressCallback,
 )
+
+logger = logging.getLogger("fapai.adapter.douyin")
 
 CHROME_PATHS = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -33,7 +35,13 @@ class DouyinAdapter(BasePlatformAdapter):
         xhr_data: list[dict] = []
         creator_info = CreatorInfo()
 
+        logger.info(f"Douyin crawl starting: uid={platform_uid}, max_items={max_items}, headless={headless}")
+
         chrome_exe = next((p for p in CHROME_PATHS if os.path.exists(p)), None)
+        if chrome_exe:
+            logger.info(f"Using Chrome: {chrome_exe}")
+        else:
+            logger.warning("No Chrome found in standard paths, will try Playwright Chromium")
 
         async with async_playwright() as p:
             launch_args = {
@@ -43,6 +51,7 @@ class DouyinAdapter(BasePlatformAdapter):
             if chrome_exe:
                 launch_args["executable_path"] = chrome_exe
 
+            logger.info("Launching browser...")
             browser = await p.chromium.launch(**launch_args)
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
@@ -54,8 +63,10 @@ class DouyinAdapter(BasePlatformAdapter):
             async def on_response(response):
                 if "/aweme/v1/web/aweme/post" in response.url:
                     try:
-                        xhr_data.append(await response.json())
+                        data = await response.json()
+                        xhr_data.append(data)
                         total = sum(len(d.get("aweme_list", [])) for d in xhr_data)
+                        logger.info(f"Captured XHR: {len(data.get('aweme_list', []))} videos (total={total})")
                         if progress_callback:
                             await progress_callback(total, max_items, "running")
                     except Exception:
@@ -63,43 +74,52 @@ class DouyinAdapter(BasePlatformAdapter):
 
             page.on("response", on_response)
 
+            logger.info(f"Navigating to: {user_url}")
             try:
                 await page.goto(user_url, wait_until="domcontentloaded", timeout=45000)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Page navigation incomplete: {e}")
             await asyncio.sleep(5)
 
             # Check login wall
             if "login" in page.url or "passport" in page.url:
+                logger.warning(f"Login wall detected at: {page.url}")
                 if headless:
                     raise RuntimeError("Login required. Set headless=False to scan QR code.")
                 print("[Douyin] Please log in via QR code in the browser window, then press Enter...")
-                # In a real app, this would signal the frontend. For now, console input.
                 await asyncio.get_event_loop().run_in_executor(None, input)
+                logger.info("Login complete, re-navigating...")
                 await page.goto(user_url, wait_until="domcontentloaded", timeout=30000)
                 await asyncio.sleep(5)
 
             # Scroll for more
+            logger.info("Starting scroll to load more videos...")
             prev_total = 0
             no_new = 0
-            for _ in range(20):
+            for i in range(20):
                 current_total = sum(len(d.get("aweme_list", [])) for d in xhr_data)
                 if max_items > 0 and current_total >= max_items:
+                    logger.info(f"Reached max_items={max_items}, stopping scroll")
                     break
                 if current_total == prev_total:
                     no_new += 1
                     if no_new >= 5:
+                        logger.info(f"No new data after {no_new} scrolls, stopping")
                         break
                 else:
                     no_new = 0
                 prev_total = current_total
+                if i % 3 == 0:
+                    logger.info(f"Scroll {i+1}/20: {current_total} videos captured so far")
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 await asyncio.sleep(2)
 
+            logger.info("Closing browser...")
             await browser.close()
 
         # Extract creator info from first aweme
         items = self._parse_xhr_data(xhr_data, max_items)
+        logger.info(f"Parsed {len(items)} content items from {len(xhr_data)} XHR responses")
         for d in xhr_data:
             for aweme in d.get("aweme_list", []):
                 author = aweme.get("author", {})
