@@ -24,14 +24,14 @@ async def crawl_creator(
     adapter = get_adapter(creator.platform)
 
     logger.info(
-        f"Starting crawl: creator_id={creator.id}, platform={creator.platform.value}, "
+        f"Starting crawl: creator_id={creator.id}, platform={creator.platform}, "
         f"uid={creator.platform_uid}, trigger={trigger_type.value}, max_items={max_items}"
     )
 
-    # 1. Create session
+    # 1. Create session — platform/trigger_type/status are String columns, use .value for enums
     session = CrawlSession(
         creator_id=creator.id,
-        platform=creator.platform.value,
+        platform=creator.platform,  # already a string from DB
         trigger_type=trigger_type.value,
         status=SessionStatus.RUNNING.value,
     )
@@ -42,7 +42,7 @@ async def crawl_creator(
 
     # 2. Run crawler
     try:
-        logger.info(f"Calling adapter.crawl_creator() for platform={creator.platform.value}...")
+        logger.info(f"Calling adapter.crawl_creator() for platform={creator.platform}...")
         creator_info, items = await adapter.crawl_creator(
             platform_uid=creator.platform_uid,
             max_items=max_items,
