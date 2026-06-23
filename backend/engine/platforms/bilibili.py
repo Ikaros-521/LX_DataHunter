@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import time
 import urllib.parse
 from datetime import datetime
@@ -194,6 +193,45 @@ class BilibiliAdapter(BasePlatformAdapter):
 
     # ---- Playwright: 从视频页 __INITIAL_STATE__ 提取 stat ----
 
+    @staticmethod
+    def _extract_init_state_json(html: str) -> dict | None:
+        """从 HTML 中提取 window.__INITIAL_STATE__ 的完整 JSON (手动数括号)"""
+        marker = "window.__INITIAL_STATE__"
+        idx = html.find(marker)
+        if idx == -1:
+            return None
+
+        # 找到 marker 后面的第一个 '{'
+        brace_start = html.find("{", idx + len(marker))
+        if brace_start == -1:
+            return None
+
+        # 数括号匹配完整的 JSON 对象
+        depth = 0
+        pos = brace_start
+        while pos < len(html):
+            ch = html[pos]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    json_str = html[brace_start:pos + 1]
+                    return json.loads(json_str)
+            elif ch == '"':
+                # 跳过字符串，处理转义
+                pos += 1
+                while pos < len(html):
+                    if html[pos] == '\\':
+                        pos += 2
+                        continue
+                    if html[pos] == '"':
+                        break
+                    pos += 1
+            pos += 1
+
+        return None
+
     async def _enrich_stats_with_browser(self, items: list[ContentItem], cookies: dict):
         from playwright.async_api import async_playwright
 
@@ -215,7 +253,6 @@ class BilibiliAdapter(BasePlatformAdapter):
                 viewport={"width": 1280, "height": 720},
             )
 
-            # 注入 cookie
             if cookies:
                 cookie_list = [{"name": k, "value": v, "domain": ".bilibili.com", "path": "/"}
                               for k, v in cookies.items()]
@@ -236,19 +273,11 @@ class BilibiliAdapter(BasePlatformAdapter):
                     await asyncio.sleep(1.5)
 
                     html = await page.content()
-                    match = re.search(
-                        r'window\.__INITIAL_STATE__\s*=\s*(\{.+?\});\s*\(function',
-                        html, re.DOTALL
-                    )
-                    if not match:
-                        match = re.search(
-                            r'window\.__INITIAL_STATE__\s*=\s*(\{.+?\});\s*</script>',
-                            html, re.DOTALL
-                        )
-                    if not match:
+                    state = self._extract_init_state_json(html)
+                    if not state:
+                        logger.debug(f"No __INITIAL_STATE__ for {bvid}")
                         continue
 
-                    state = json.loads(match.group(1))
                     stat = state.get("videoData", {}).get("stat", {})
                     if not stat:
                         continue
