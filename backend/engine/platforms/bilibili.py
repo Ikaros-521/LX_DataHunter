@@ -26,10 +26,6 @@ MIXIN_KEY = [
     27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13,
 ]
 
-# Cookie jar，每次 crawl 独立
-_session_cookies: dict = {}
-
-
 def _parse_cookies(cookie_str: str) -> dict:
     """Cookie 字符串 → dict"""
     result = {}
@@ -41,13 +37,13 @@ def _parse_cookies(cookie_str: str) -> dict:
     return result
 
 
-def _fetch_wbi_keys() -> tuple[str, str]:
+def _fetch_wbi_keys(cookies: dict | None = None) -> tuple[str, str]:
     """获取 WBI 签名密钥"""
     try:
         resp = Fetcher.get(
             "https://api.bilibili.com/x/web-interface/nav",
             headers=HEADERS,
-            cookies=_session_cookies if _session_cookies else None,
+            cookies=cookies if cookies else None,
         )
         wbi = resp.json().get("data", {}).get("wbi_img", {})
         img_key = wbi.get("img_url", "").split("/")[-1].split(".")[0]
@@ -58,9 +54,9 @@ def _fetch_wbi_keys() -> tuple[str, str]:
         return "", ""
 
 
-def _wbi_sign(params: dict) -> dict:
+def _wbi_sign(params: dict, cookies: dict | None = None) -> dict:
     """为请求参数添加 WBI 签名"""
-    img_key, sub_key = _fetch_wbi_keys()
+    img_key, sub_key = _fetch_wbi_keys(cookies)
     if not img_key or not sub_key:
         return params
 
@@ -85,16 +81,16 @@ class BilibiliAdapter(BasePlatformAdapter):
         cookie_str: Optional[str] = None,
     ) -> tuple[CreatorInfo, list[ContentItem]]:
         """通过 B站 HTTP API 抓取用户空间视频。platform_uid = 用户 mid (数字)"""
-        global _session_cookies
         mid = platform_uid.strip()
 
-        # 注入 cookie
-        if cookie_str:
-            _session_cookies = _parse_cookies(cookie_str)
-        logger.info(f"Bilibili crawl: mid={mid}, max={max_items}, cookies={len(_session_cookies)}")
+        # 解析 cookie
+        cookies = _parse_cookies(cookie_str) if cookie_str else {}
+        cookie_keys = [k for k in cookies if k in ("SESSDATA", "bili_jct", "DedeUserID")]
+        logger.info(f"Bilibili crawl: mid={mid}, max={max_items}, "
+                     f"total_cookies={len(cookies)}, auth_keys={cookie_keys}")
 
         # 1. 用户信息
-        creator_info = await self._fetch_user_info(mid)
+        creator_info = await self._fetch_user_info(mid, cookies)
 
         # 2. 分页获取视频列表
         items: list[ContentItem] = []
@@ -102,7 +98,7 @@ class BilibiliAdapter(BasePlatformAdapter):
         page_size = min(50, max_items) if max_items > 0 else 50
 
         while len(items) < (max_items or 99999):
-            page_items, has_more = await self._fetch_video_page(mid, page, page_size)
+            page_items, has_more = await self._fetch_video_page(mid, page, page_size, cookies)
             items.extend(page_items)
 
             if progress_callback:
@@ -111,7 +107,7 @@ class BilibiliAdapter(BasePlatformAdapter):
             if not has_more or not page_items:
                 break
             page += 1
-            await asyncio.sleep(0.5)  # 避免触发频率限制
+            await asyncio.sleep(0.5)
 
         if max_items > 0 and len(items) > max_items:
             items = items[:max_items]
@@ -119,19 +115,19 @@ class BilibiliAdapter(BasePlatformAdapter):
         # 3. 批量获取互动数据
         if items:
             logger.info(f"Enriching stats for {len(items)} videos...")
-            await self._enrich_with_stats(items, cookie_str)
+            await self._enrich_with_stats(items, cookies)
 
         logger.info(f"Bilibili done: {creator_info.nickname}, {len(items)} videos")
         return creator_info, items
 
-    async def _fetch_user_info(self, mid: str) -> CreatorInfo:
+    async def _fetch_user_info(self, mid: str, cookies: dict) -> CreatorInfo:
         """获取用户信息"""
         try:
             resp = Fetcher.get(
                 "https://api.bilibili.com/x/space/wbi/acc/info",
-                params=_wbi_sign({"mid": mid}),
+                params=_wbi_sign({"mid": mid}, cookies),
                 headers=HEADERS,
-                cookies=_session_cookies if _session_cookies else None,
+                cookies=cookies if cookies else None,
             )
             if resp.status == 200 and resp.json().get("code") == 0:
                 user = resp.json()["data"]
@@ -147,15 +143,15 @@ class BilibiliAdapter(BasePlatformAdapter):
             logger.warning(f"User info failed: {e}")
         return CreatorInfo()
 
-    async def _fetch_video_page(self, mid: str, page: int, ps: int) -> tuple[list[ContentItem], bool]:
+    async def _fetch_video_page(self, mid: str, page: int, ps: int, cookies: dict) -> tuple[list[ContentItem], bool]:
         """获取一页视频列表"""
         try:
-            params = _wbi_sign({"mid": mid, "ps": ps, "pn": page, "order": "pubdate"})
+            params = _wbi_sign({"mid": mid, "ps": ps, "pn": page, "order": "pubdate"}, cookies)
             resp = Fetcher.get(
                 "https://api.bilibili.com/x/space/wbi/arc/search",
                 params=params,
                 headers={**HEADERS, "Referer": f"https://space.bilibili.com/{mid}"},
-                cookies=_session_cookies if _session_cookies else None,
+                cookies=cookies if cookies else None,
             )
             if resp.status != 200 or resp.json().get("code") != 0:
                 code = resp.json().get("code", "?") if resp.status == 200 else resp.status
@@ -193,9 +189,8 @@ class BilibiliAdapter(BasePlatformAdapter):
             logger.warning(f"Video page {page} failed: {e}")
             return [], False
 
-    async def _enrich_with_stats(self, items: list[ContentItem], cookie_str: str | None = None):
+    async def _enrich_with_stats(self, items: list[ContentItem], cookies: dict):
         """用 view API 批量获取准确的互动数据"""
-        cookies = _parse_cookies(cookie_str) if cookie_str else {}
         enriched = 0
         for item in items:
             try:
