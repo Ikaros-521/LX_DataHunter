@@ -44,7 +44,7 @@ export default function CredentialManager() {
     setAutoLoading(true);
     setAutoResult(null);
     try {
-      const res = await client.post(`/credentials/auto-login?platform=${platform}&headless=false`);
+      const res = await client.post(`/credentials/auto-login?platform=${platform}&headless=false`, null, { timeout: 360000 }); // 6 min
       const { cookie_str, cookie_count } = res.data;
       setAutoResult(cookie_str);
       message.success(`捕获到 ${cookie_count} 个 Cookie`);
