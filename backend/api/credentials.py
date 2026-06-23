@@ -1,6 +1,8 @@
 """Platform credential management."""
+import asyncio
 import logging
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, desc
 from backend.database import get_db
@@ -55,7 +57,6 @@ async def activate_credential(credential_id: int, db: AsyncSession = Depends(get
     cred = await db.get(PlatformCredential, credential_id)
     if not cred:
         raise HTTPException(404, f"Credential not found: id={credential_id}")
-    # 同平台全部取消
     await db.execute(
         update(PlatformCredential)
         .where(PlatformCredential.platform == cred.platform)
@@ -76,6 +77,110 @@ async def delete_credential(credential_id: int, db: AsyncSession = Depends(get_d
     return {"message": f"Deleted credential id={credential_id}"}
 
 
+# ---- 浏览器自动登录 ----
+
+LOGIN_URLS = {
+    "douyin": "https://www.douyin.com/",
+    "bilibili": "https://passport.bilibili.com/login",
+    "kuaishou": "https://www.kuaishou.com/",
+    "xiaohongshu": "https://www.xiaohongshu.com/",
+}
+
+LOGIN_DETECT = {
+    "douyin": lambda url: "login" not in url and "passport" not in url and "douyin.com" in url,
+    "bilibili": lambda page_title: page_title and "个人中心" in page_title,
+    "kuaishou": lambda url: "www.kuaishou.com" in url and "login" not in url,
+    "xiaohongshu": lambda url: "www.xiaohongshu.com" in url and "login" not in url,
+}
+
+
+@router.post("/auto-login")
+async def auto_login(platform: str, headless: bool = False):
+    """打开浏览器让用户登录，自动捕获 Cookie。返回 cookie_str。"""
+    if platform not in LOGIN_URLS:
+        raise HTTPException(400, f"Unsupported platform for auto-login: {platform}")
+
+    from playwright.async_api import async_playwright
+    import os
+
+    chrome_paths = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/usr/bin/google-chrome",
+    ]
+    chrome_exe = next((p for p in chrome_paths if os.path.exists(p)), None)
+
+    logger.info(f"Starting auto-login for {platform} (headless={headless})")
+
+    async with async_playwright() as p:
+        launch_args = {
+            "headless": headless,
+            "args": ["--no-sandbox", "--disable-setuid-sandbox"],
+        }
+        if chrome_exe:
+            launch_args["executable_path"] = chrome_exe
+
+        browser = await p.chromium.launch(**launch_args)
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
+            locale="zh-CN",
+            viewport={"width": 1280, "height": 800},
+        )
+        page = await context.new_page()
+
+        login_url = LOGIN_URLS[platform]
+        logger.info(f"Navigating to login page: {login_url}")
+        await page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
+
+        # 等待用户完成登录（最多 5 分钟）
+        logger.info(f"Waiting for user to log in (timeout: 300s)...")
+        detector = LOGIN_DETECT.get(platform, lambda x: True)
+
+        try:
+            for _ in range(150):  # 150 * 2s = 300s 超时
+                await asyncio.sleep(2)
+                try:
+                    current_url = page.url
+                    page_title = await page.title()
+
+                    if platform == "bilibili":
+                        # B站检测：URL 变为首页且不再在登录页
+                        logged_in = "passport" not in current_url and "login" not in current_url
+                    elif platform == "douyin":
+                        # 抖音检测：URL 不再是 login/passport
+                        logged_in = "login" not in current_url and "passport" not in current_url
+                    else:
+                        logged_in = "login" not in current_url
+
+                    if logged_in:
+                        logger.info(f"Login detected for {platform} at {current_url}")
+                        await asyncio.sleep(3)  # 等 cookie 完全写入
+                        break
+                except Exception:
+                    continue
+            else:
+                logger.warning(f"Login timeout for {platform}")
+        finally:
+            # 无论超时与否，都提取当前 cookie
+            cookies = await context.cookies()
+            await browser.close()
+
+    # 将 Playwright cookies 转为 HTTP Cookie 字符串
+    cookie_parts = [f"{c['name']}={c['value']}" for c in cookies
+                    if c.get('name') and c.get('value')]
+    cookie_str = "; ".join(cookie_parts)
+
+    logger.info(f"Captured {len(cookie_parts)} cookies for {platform}: "
+                f"names={[c['name'] for c in cookies[:8]]}...")
+
+    return JSONResponse({
+        "cookie_str": cookie_str,
+        "cookie_count": len(cookie_parts),
+        "platform": platform,
+    })
+
+
 async def get_active_cookie(platform: str, db: AsyncSession) -> str | None:
     """获取指定平台的活跃 Cookie 字符串。供爬虫适配器调用。"""
     result = await db.execute(
@@ -85,13 +190,4 @@ async def get_active_cookie(platform: str, db: AsyncSession) -> str | None:
         )
     )
     cred = result.scalar_one_or_none()
-    if cred and cred.cookie_str:
-        # 解析 cookie 字符串为 dict
-        cookies = {}
-        for item in cred.cookie_str.split(";"):
-            item = item.strip()
-            if "=" in item:
-                k, _, v = item.partition("=")
-                cookies[k.strip()] = v.strip()
-        return cred.cookie_str
-    return None
+    return cred.cookie_str if cred else None
