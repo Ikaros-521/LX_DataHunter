@@ -100,24 +100,20 @@ export default function CredentialManager() {
     },
   ];
 
+  // 平台选项
+  const platformOptions = [
+    { label: '抖音', value: 'douyin' },
+    { label: 'B站', value: 'bilibili' },
+    { label: '快手', value: 'kuaishou' },
+    { label: '小红书', value: 'xiaohongshu' },
+  ];
+
   const tabItems = [
     {
       key: 'browser',
       label: <span><ChromeOutlined /> 浏览器登录</span>,
       children: (
         <div>
-          <Form.Item name="platform" label="平台" rules={[{ required: true }]}>
-            <Select placeholder="选择平台" options={[
-              { label: '抖音 (扫码登录)', value: 'douyin' },
-              { label: 'B站 (扫码/密码)', value: 'bilibili' },
-              { label: '快手 (扫码登录)', value: 'kuaishou' },
-              { label: '小红书 (扫码登录)', value: 'xiaohongshu' },
-            ]} />
-          </Form.Item>
-          <Form.Item name="name" label="备注名（可选）">
-            <Input placeholder="如: 主账号" />
-          </Form.Item>
-
           <Button type="primary" icon={<ChromeOutlined />} loading={autoLoading}
             onClick={handleAutoLogin} block size="large">
             打开浏览器登录
@@ -125,6 +121,12 @@ export default function CredentialManager() {
           <div style={{ color: '#888', fontSize: 12, marginTop: 8 }}>
             浏览器窗口打开后，请手动完成登录（扫码或密码）。登录成功后 Cookie 会自动捕获。
           </div>
+
+          {autoLoading && (
+            <div style={{ textAlign: 'center', marginTop: 16 }}>
+              <Spin tip="等待登录中... (最多5分钟)" />
+            </div>
+          )}
 
           {autoResult && (
             <Alert type="success" showIcon style={{ marginTop: 16 }}
@@ -137,12 +139,6 @@ export default function CredentialManager() {
                 </div>
               } />
           )}
-
-          {autoLoading && (
-            <div style={{ textAlign: 'center', marginTop: 16 }}>
-              <Spin tip="等待登录中... (最多5分钟)" />
-            </div>
-          )}
         </div>
       ),
     },
@@ -151,17 +147,6 @@ export default function CredentialManager() {
       label: <span><EditOutlined /> 手动输入</span>,
       children: (
         <div>
-          <Form.Item name="platform" label="平台" rules={[{ required: true }]}>
-            <Select placeholder="选择平台" options={[
-              { label: '抖音', value: 'douyin' },
-              { label: 'B站', value: 'bilibili' },
-              { label: '快手', value: 'kuaishou' },
-              { label: '小红书', value: 'xiaohongshu' },
-            ]} />
-          </Form.Item>
-          <Form.Item name="name" label="备注名">
-            <Input placeholder="如: 主账号Cookie" />
-          </Form.Item>
           <Form.Item name="cookie_str" label="Cookie 字符串" rules={[{ required: true }]}
             extra="从浏览器 F12 → Network → 复制请求头中的完整 Cookie 值">
             <Input.TextArea rows={4} placeholder="name1=value1; name2=value2; ..." />
@@ -182,8 +167,16 @@ export default function CredentialManager() {
       <Table dataSource={data || []} columns={columns} rowKey="id" loading={isLoading} size="small" />
 
       <Modal title="添加登录凭证" open={addOpen} onCancel={() => { setAddOpen(false); setAutoResult(null); }}
-        footer={null} width={560}>
-        <Tabs items={tabItems} />
+        footer={null} width={560} destroyOnHidden>
+        <Form form={form} layout="vertical">
+          <Form.Item name="platform" label="平台" rules={[{ required: true, message: '请选择平台' }]}>
+            <Select placeholder="选择平台" options={platformOptions} />
+          </Form.Item>
+          <Form.Item name="name" label="备注名（可选）">
+            <Input placeholder="如: 主账号" />
+          </Form.Item>
+          <Tabs items={tabItems} />
+        </Form>
       </Modal>
     </div>
   );
