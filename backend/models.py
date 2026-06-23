@@ -110,3 +110,16 @@ class ScheduleConfig(Base):
     next_run_at = Column(DateTime, nullable=True)
 
     creator = relationship("MonitoredCreator", back_populates="schedule")
+
+
+class PlatformCredential(Base):
+    """平台登录凭证（Cookie），供爬虫携带请求"""
+    __tablename__ = "platform_credentials"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    platform = Column(String(20), nullable=False, index=True)
+    name = Column(String(255), default="")  # 备注名
+    cookie_str = Column(Text, default="")    # 原始 Cookie 字符串
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

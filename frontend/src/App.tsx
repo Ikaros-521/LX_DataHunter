@@ -5,6 +5,7 @@ import CreatorList from './pages/CreatorList';
 import CreatorDetail from './pages/CreatorDetail';
 import CrawlerConsole from './pages/CrawlerConsole';
 import ContentSearch from './pages/ContentSearch';
+import CredentialManager from './pages/CredentialManager';
 
 export default function App() {
   return (
@@ -15,6 +16,7 @@ export default function App() {
         <Route path="/creators/:id" element={<CreatorDetail />} />
         <Route path="/crawler" element={<CrawlerConsole />} />
         <Route path="/search" element={<ContentSearch />} />
+        <Route path="/credentials" element={<CredentialManager />} />
       </Routes>
     </AppLayout>
   );

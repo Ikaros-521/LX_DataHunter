@@ -51,6 +51,16 @@ async def crawl_creator(
         await db.refresh(session)
         logger.info(f"Session created: id={session.id}")
 
+    # 1.5 Look up active credential for this platform
+    cookie_str = None
+    try:
+        from backend.api.credentials import get_active_cookie
+        cookie_str = await get_active_cookie(creator.platform, db)
+        if cookie_str:
+            logger.info(f"Using active credential for platform={creator.platform}")
+    except Exception as e:
+        logger.warning(f"Failed to look up credential: {e}")
+
     # 2. Run crawler
     try:
         logger.info(f"Calling adapter.crawl_creator() for platform={creator.platform}...")
@@ -59,6 +69,7 @@ async def crawl_creator(
             max_items=max_items,
             headless=headless,
             progress_callback=progress_callback,
+            cookie_str=cookie_str,
         )
         logger.info(f"Adapter returned: {len(items)} items, creator='{creator_info.nickname}'")
     except Exception as e:

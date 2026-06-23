@@ -13,6 +13,7 @@ from .api.sessions import router as sessions_router
 from .api.contents import router as contents_router
 from .api.schedules import router as schedules_router
 from .api.ws import router as ws_router
+from .api.credentials import router as credentials_router
 from .config import settings
 from .database import engine
 from .models import Base
@@ -115,6 +116,7 @@ app.include_router(sessions_router)
 app.include_router(contents_router)
 app.include_router(schedules_router)
 app.include_router(ws_router)
+app.include_router(credentials_router)
 
 
 @app.get("/api/health")

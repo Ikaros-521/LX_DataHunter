@@ -99,10 +99,19 @@ class BilibiliAdapter(BasePlatformAdapter):
         max_items: int = 50,
         headless: bool = True,
         progress_callback: Optional[ProgressCallback] = None,
+        cookie_str: Optional[str] = None,
     ) -> tuple[CreatorInfo, list[ContentItem]]:
         """通过 B站 HTTP API 抓取用户空间视频。platform_uid = 用户 mid (数字)"""
         mid = platform_uid.strip()
-        logger.info(f"Bilibili crawl starting: mid={mid}, max_items={max_items}")
+        logger.info(f"Bilibili crawl starting: mid={mid}, max_items={max_items}, has_cookie={bool(cookie_str)}")
+
+        # 解析 cookie 字符串
+        if cookie_str:
+            for item in cookie_str.split(";"):
+                item = item.strip()
+                if "=" in item:
+                    k, _, v = item.partition("=")
+                    _session_cookies[k.strip()] = v.strip()
 
         # 1. 获取用户基本信息
         creator_info = await self._fetch_user_info(mid)

@@ -111,6 +111,23 @@ class TriggerCrawlResponse(BaseModel):
     session_id: int
     message: str
 
+# ---- Credential ----
+class CredentialCreate(BaseModel):
+    platform: str
+    name: str = ""
+    cookie_str: str
+
+class CredentialResponse(BaseModel):
+    id: int
+    platform: str
+    name: str
+    cookie_str: str  # 前端需要完整 cookie 才能编辑
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
 # ---- Common ----
 class MessageResponse(BaseModel):
     message: str

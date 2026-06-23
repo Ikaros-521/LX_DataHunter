@@ -28,6 +28,7 @@ class DouyinAdapter(BasePlatformAdapter):
         max_items: int = 50,
         headless: bool = True,
         progress_callback: Optional[ProgressCallback] = None,
+        cookie_str: Optional[str] = None,
     ) -> tuple[CreatorInfo, list[ContentItem]]:
         from playwright.async_api import async_playwright
 

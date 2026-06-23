@@ -1,7 +1,7 @@
 import { Layout, Menu, Typography } from 'antd';
 import {
   DashboardOutlined, UserOutlined, SearchOutlined,
-  ThunderboltOutlined,
+  ThunderboltOutlined, KeyOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -12,6 +12,7 @@ const menuItems = [
   { key: '/creators', icon: <UserOutlined />, label: '创作者管理' },
   { key: '/crawler', icon: <ThunderboltOutlined />, label: '爬虫控制台' },
   { key: '/search', icon: <SearchOutlined />, label: '内容检索' },
+  { key: '/credentials', icon: <KeyOutlined />, label: '凭证管理' },
 ];
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
