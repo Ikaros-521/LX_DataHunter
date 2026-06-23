@@ -195,28 +195,35 @@ class BilibiliAdapter(BasePlatformAdapter):
 
     @staticmethod
     def _extract_init_state_json(html: str) -> dict | None:
-        """从 HTML 中提取 window.__INITIAL_STATE__ 的完整 JSON (手动数括号)"""
-        # 精确匹配 "window.__INITIAL_STATE__ = {"
-        marker = "window.__INITIAL_STATE__"
+        """从 HTML 中提取 window.__INITIAL_STATE__ = {...} 的完整 JSON"""
+        # B站 HTML 中多次出现 __INITIAL_STATE__:
+        #   1. window.__INITIAL_STATE__ = {...JSON...}   ← 我们要这个
+        #   2. window.__INITIAL_STATE__&&(...)           ← JavaScript 判断，跳过
+        # 所以精确匹配 "= {" 模式
         search_from = 0
         while True:
-            idx = html.find(marker, search_from)
+            idx = html.find("window.__INITIAL_STATE__", search_from)
             if idx == -1:
                 return None
 
-            # 跳过 " = " 或 "=" 找到 {
-            after_marker = html[idx + len(marker):idx + len(marker) + 20]
-            eq_pos = after_marker.find("=")
-            if eq_pos == -1:
-                search_from = idx + len(marker)
-                continue
-            brace_start = after_marker.find("{", eq_pos)
-            if brace_start == -1:
-                search_from = idx + len(marker)
+            # 跳过空白找 "="
+            after = html[idx + len("window.__INITIAL_STATE__"):]
+            trimmed = after.lstrip()
+            if not trimmed or trimmed[0] != "=":
+                search_from = idx + 1
                 continue
 
-            # 从 HTML 全局位置开始数括号
-            abs_brace = idx + len(marker) + brace_start
+            # 跳过 "=" 后的空白找 "{"
+            eq_stripped = trimmed[1:].lstrip()
+            if not eq_stripped or eq_stripped[0] != "{":
+                search_from = idx + 1
+                continue
+
+            # 计算 { 在 HTML 中的绝对位置
+            brace_offset = len("window.__INITIAL_STATE__") + (len(after) - len(trimmed)) + 1 + (len(trimmed[1:]) - len(eq_stripped))
+            abs_brace = idx + brace_offset
+
+            # 数括号
             depth = 0
             pos = abs_brace
             while pos < len(html):
@@ -230,8 +237,7 @@ class BilibiliAdapter(BasePlatformAdapter):
                         try:
                             return json.loads(json_str)
                         except json.JSONDecodeError:
-                            # 继续找下一个 marker
-                            search_from = idx + len(marker)
+                            search_from = idx + 1
                             break
                 elif ch == '"':
                     pos += 1
@@ -244,12 +250,10 @@ class BilibiliAdapter(BasePlatformAdapter):
                         pos += 1
                 pos += 1
             else:
-                # 到 HTML 末尾未闭合
                 break
 
-            # 继续搜索下一个 marker
+            search_from = idx + 1
 
-        logger.warning("__INITIAL_STATE__: not found or unparseable")
         return None
 
     async def _enrich_stats_with_browser(self, items: list[ContentItem], cookies: dict):
