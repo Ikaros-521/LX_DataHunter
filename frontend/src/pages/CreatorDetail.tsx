@@ -53,7 +53,7 @@ export default function CreatorDetail() {
         extra={
           <Button type="primary" icon={<ThunderboltOutlined />}
             loading={crawlMutation.isPending}
-            onClick={() => crawlMutation.mutate(creatorId, {
+            onClick={() => crawlMutation.mutate({ creatorId }, {
               onSuccess: (res: any) => message.success(`爬取已启动 (Session #${res.data.session_id})`),
             })}>
             立即爬取

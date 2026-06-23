@@ -46,10 +46,13 @@ class BilibiliAdapter(BasePlatformAdapter):
         headless: bool = True,
         progress_callback: Optional[ProgressCallback] = None,
         cookie_str: Optional[str] = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
     ) -> tuple[CreatorInfo, list[ContentItem]]:
         mid = int(platform_uid.strip())
         cred = _make_credential(cookie_str)
-        logger.info(f"Bilibili crawl: mid={mid}, max={max_items}, has_credential={cred is not None}")
+        logger.info(f"Bilibili crawl: mid={mid}, max={max_items}, "
+                     f"date_from={date_from}, date_to={date_to}, has_credential={cred is not None}")
 
         # ---- 1. 用户信息 ----
         creator_info = await self._fetch_user_info(mid, cred)
@@ -105,6 +108,9 @@ class BilibiliAdapter(BasePlatformAdapter):
 
         if max_items > 0 and len(items) > max_items:
             items = items[:max_items]
+
+        # ---- 2.5 日期过滤 ----
+        items = self._filter_by_date(items, date_from, date_to)
 
         # ---- 3. 逐视频获取 stat ----
         if items:
@@ -180,6 +186,23 @@ class BilibiliAdapter(BasePlatformAdapter):
                 logger.warning(f"Stat for {bvid or aid}: {e}")
 
         logger.info(f"Stats enriched: {enriched}/{len(items)}")
+
+    @staticmethod
+    def _filter_by_date(items: list[ContentItem], date_from: str | None, date_to: str | None) -> list[ContentItem]:
+        """按日期过滤视频"""
+        if not date_from and not date_to:
+            return items
+        result = []
+        for item in items:
+            if item.create_time is None:
+                result.append(item)  # 无日期的不过滤
+                continue
+            if date_from and item.create_time.strftime("%Y-%m-%d") < date_from:
+                continue
+            if date_to and item.create_time.strftime("%Y-%m-%d") > date_to:
+                continue
+            result.append(item)
+        return result
 
     @staticmethod
     def _parse_duration(length: str) -> float:

@@ -81,7 +81,8 @@ export function useDeleteCreator() {
 export function useTriggerCrawl() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (creatorId: number) => client.post(`/creators/${creatorId}/crawl`),
+    mutationFn: ({ creatorId, max_items, date_from, date_to }: { creatorId: number; max_items?: number; date_from?: string; date_to?: string }) =>
+      client.post(`/creators/${creatorId}/crawl`, { max_items, date_from, date_to }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['sessions'] }),
   });
 }

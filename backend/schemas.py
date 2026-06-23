@@ -107,6 +107,11 @@ class PlatformInfo(BaseModel):
     status: str = "active"  # active / coming_soon
 
 # ---- Trigger ----
+class CrawlOptions(BaseModel):
+    max_items: int | None = Field(default=50, ge=1, le=500, description="最大爬取条数")
+    date_from: str | None = Field(default=None, description="起始日期 YYYY-MM-DD")
+    date_to: str | None = Field(default=None, description="截止日期 YYYY-MM-DD")
+
 class TriggerCrawlResponse(BaseModel):
     session_id: int
     message: str

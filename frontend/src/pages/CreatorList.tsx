@@ -47,7 +47,7 @@ export default function CreatorList() {
         <Space>
           <Button size="small" onClick={() => navigate(`/creators/${record.id}`)}>详情</Button>
           <Button size="small" icon={<ThunderboltOutlined />} loading={crawlMutation.isPending}
-            onClick={() => crawlMutation.mutate(record.id, {
+            onClick={() => crawlMutation.mutate({ creatorId: record.id }, {
               onSuccess: (res: any) => message.success(`爬取已启动 (Session #${res.data.session_id})`),
             })}>爬取</Button>
           <Popconfirm title="确认删除?" onConfirm={() => deleteMutation.mutate(record.id)}>

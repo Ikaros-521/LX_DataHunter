@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Row, Col, Table, Select, Button, Space, Tag, message } from 'antd';
+import { Row, Col, Table, Select, Button, Space, Tag, message, InputNumber } from 'antd';
 import { ThunderboltOutlined } from '@ant-design/icons';
 import CrawlProgress from '../components/CrawlProgress';
 import PlatformTag from '../components/PlatformTag';
@@ -20,12 +20,14 @@ export default function CrawlerConsole() {
   );
   const progress = useCrawlProgress(watchingSession);
 
+  const [maxItems, setMaxItems] = useState(50);
+
   const handleTrigger = () => {
     if (!selectedCreator) {
       message.warning('请选择要爬取的创作者');
       return;
     }
-    crawlMutation.mutate(selectedCreator, {
+    crawlMutation.mutate({ creatorId: selectedCreator, max_items: maxItems }, {
       onSuccess: (res: any) => {
         message.success(`爬取已启动 (Session #${res.data.session_id})`);
         setTimeout(() => setWatchingSession(res.data.session_id), 500);
@@ -54,7 +56,7 @@ export default function CrawlerConsole() {
             <Select
               showSearch
               placeholder="选择创作者"
-              style={{ width: 250 }}
+              style={{ width: 200 }}
               value={selectedCreator}
               onChange={setSelectedCreator}
               filterOption={(input, option) => (option?.label as string || '').toLowerCase().includes(input.toLowerCase())}
@@ -63,6 +65,8 @@ export default function CrawlerConsole() {
                 value: c.id,
               }))}
             />
+            <InputNumber min={1} max={500} value={maxItems} onChange={v => setMaxItems(v || 50)}
+              addonAfter="条" style={{ width: 120 }} />
             <Button type="primary" icon={<ThunderboltOutlined />}
               loading={crawlMutation.isPending}
               onClick={handleTrigger}>

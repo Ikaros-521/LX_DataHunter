@@ -6,3 +6,4 @@ apscheduler>=3.10.0
 pydantic>=2.0
 pydantic-settings>=2.0
 scrapling[fetchers]>=0.4.9
+bilibili-api-dev

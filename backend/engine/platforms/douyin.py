@@ -29,6 +29,8 @@ class DouyinAdapter(BasePlatformAdapter):
         headless: bool = True,
         progress_callback: Optional[ProgressCallback] = None,
         cookie_str: Optional[str] = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
     ) -> tuple[CreatorInfo, list[ContentItem]]:
         from playwright.async_api import async_playwright
 
@@ -135,6 +137,14 @@ class DouyinAdapter(BasePlatformAdapter):
                 break
             if creator_info.nickname:
                 break
+
+        # 日期过滤
+        if date_from or date_to:
+            items = [i for i in items if (
+                i.create_time is None
+                or (not date_from or i.create_time.strftime("%Y-%m-%d") >= date_from)
+                and (not date_to or i.create_time.strftime("%Y-%m-%d") <= date_to)
+            )]
 
         return creator_info, items
 

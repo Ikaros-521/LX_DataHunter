@@ -20,6 +20,8 @@ async def crawl_creator(
     headless: bool = True,
     progress_callback: Any = None,
     existing_session_id: Optional[int] = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> CrawlSession:
     """Execute a crawl for a creator.
 
@@ -70,6 +72,8 @@ async def crawl_creator(
             headless=headless,
             progress_callback=progress_callback,
             cookie_str=cookie_str,
+            date_from=date_from,
+            date_to=date_to,
         )
         logger.info(f"Adapter returned: {len(items)} items, creator='{creator_info.nickname}'")
     except Exception as e:

@@ -45,6 +45,8 @@ class BasePlatformAdapter(ABC):
         headless: bool = True,
         progress_callback: Optional[ProgressCallback] = None,
         cookie_str: Optional[str] = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
     ) -> tuple[CreatorInfo, list[ContentItem]]:
         """Crawl a creator's content. Returns (creator_info, content_list)."""
         ...
