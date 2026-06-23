@@ -1,13 +1,9 @@
-"""Bilibili platform adapter — uses HTTP API with WBI signing."""
-import hashlib
+"""Bilibili platform adapter — uses Playwright to render space page and intercept API."""
+import asyncio
 import logging
-import time
-import urllib.parse
+import os
 from datetime import datetime
-from functools import lru_cache
 from typing import Optional
-
-from scrapling.fetchers import Fetcher
 
 from backend.models import Platform, ContentType
 from .base import (
@@ -16,78 +12,12 @@ from .base import (
 
 logger = logging.getLogger("fapai.adapter.bilibili")
 
-BILIBILI_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/131.0.0.0 Safari/537.36"
-    ),
-    "Referer": "https://www.bilibili.com/",
-}
-
-# WBI 签名密钥缓存（60秒刷新）
-_wbi_keys: dict = {"img_key": "", "sub_key": "", "expires_at": 0}
-_mixin_key_table = [
-    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
-    27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13,
+CHROME_PATHS = [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/usr/bin/google-chrome",
 ]
-
-
-# 全局 cookie jar，维持 B站 API 会话
-_session_cookies: dict = {}
-
-def _fetch_wbi_keys() -> dict:
-    """获取并缓存 WBI 签名密钥，同时维持 cookie 会话"""
-    global _wbi_keys, _session_cookies
-    now = time.time()
-    if _wbi_keys["expires_at"] > now:
-        return _wbi_keys
-
-    try:
-        resp = Fetcher.get(
-            "https://api.bilibili.com/x/web-interface/nav",
-            headers=BILIBILI_HEADERS,
-            stealthy_headers=True,
-        )
-        # 保存 cookies 供后续请求使用
-        if resp.cookies:
-            _session_cookies = {c["name"]: c["value"] for c in resp.cookies if isinstance(c, dict)}
-
-        data = resp.json().get("data", {}).get("wbi_img", {})
-        img_url = data.get("img_url", "")
-        sub_url = data.get("sub_url", "")
-
-        # 从 URL 中提取 key：/bfs/wbi/xxx.png → xxx
-        img_key = img_url.split("/")[-1].split(".")[0] if img_url else ""
-        sub_key = sub_url.split("/")[-1].split(".")[0] if sub_url else ""
-
-        _wbi_keys = {"img_key": img_key, "sub_key": sub_key, "expires_at": now + 300}
-        logger.info(f"WBI keys refreshed (img={img_key[:8]}..., sub={sub_key[:8]}...)")
-    except Exception as e:
-        logger.warning(f"Failed to fetch WBI keys: {e}")
-
-    return _wbi_keys
-
-
-def _sign_params(params: dict) -> dict:
-    """为请求参数添加 WBI 签名 (w_rid + wts)"""
-    keys = _fetch_wbi_keys()
-    mixin = keys["img_key"] + keys["sub_key"]
-    if not mixin:
-        return params  # 无密钥时跳过签名
-
-    # 拼接混合密钥
-    mixed = "".join(mixin[i] for i in _mixin_key_table if i < len(mixin))[:32]
-
-    # 排序参数
-    params["wts"] = int(time.time())
-    sorted_params = sorted(params.items())
-    query = urllib.parse.urlencode(sorted_params)
-
-    # MD5(query + mixed_key)
-    w_rid = hashlib.md5((query + mixed).encode()).hexdigest()
-    params["w_rid"] = w_rid
-    return params
 
 
 class BilibiliAdapter(BasePlatformAdapter):
@@ -101,46 +31,125 @@ class BilibiliAdapter(BasePlatformAdapter):
         progress_callback: Optional[ProgressCallback] = None,
         cookie_str: Optional[str] = None,
     ) -> tuple[CreatorInfo, list[ContentItem]]:
-        """通过 B站 HTTP API 抓取用户空间视频。platform_uid = 用户 mid (数字)"""
+        """通过 Playwright 浏览器抓取 B站用户空间视频。platform_uid = 用户 mid (数字)"""
+        from playwright.async_api import async_playwright
+
         mid = platform_uid.strip()
+        space_url = f"https://space.bilibili.com/{mid}/video"
         logger.info(f"Bilibili crawl starting: mid={mid}, max_items={max_items}, has_cookie={bool(cookie_str)}")
 
-        # 解析 cookie 字符串
-        if cookie_str:
-            for item in cookie_str.split(";"):
-                item = item.strip()
-                if "=" in item:
-                    k, _, v = item.partition("=")
-                    _session_cookies[k.strip()] = v.strip()
+        xhr_data: list[dict] = []
+        creator_info = CreatorInfo()
 
-        # 1. 获取用户基本信息
-        creator_info = await self._fetch_user_info(mid)
+        chrome_exe = next((p for p in CHROME_PATHS if os.path.exists(p)), None)
+        if chrome_exe:
+            logger.info(f"Using Chrome: {chrome_exe}")
 
-        # 2. 分页获取视频列表（基础信息）
-        items: list[ContentItem] = []
-        page = 1
-        page_size = min(50, max_items) if max_items > 0 else 50
+        async with async_playwright() as p:
+            launch_args = {
+                "headless": headless,
+                "args": ["--no-sandbox", "--disable-setuid-sandbox"],
+            }
+            if chrome_exe:
+                launch_args["executable_path"] = chrome_exe
 
-        while True:
-            if max_items > 0 and len(items) >= max_items:
-                break
+            browser = await p.chromium.launch(**launch_args)
 
-            logger.info(f"Fetching page {page} (have {len(items)} items so far)...")
-            page_items, has_more = await self._fetch_video_page(mid, page, page_size)
-            items.extend(page_items)
+            # 创建上下文 — 如果有 Cookie 则注入
+            context_kwargs: dict = {
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
+                "locale": "zh-CN",
+                "viewport": {"width": 1920, "height": 1080},
+            }
+            context = await browser.new_context(**context_kwargs)
 
-            if progress_callback:
-                await progress_callback(len(items), max_items, "running")
+            # 注入 Cookie
+            if cookie_str:
+                cookies_to_set = []
+                for item in cookie_str.split(";"):
+                    item = item.strip()
+                    if "=" in item:
+                        k, _, v = item.partition("=")
+                        cookies_to_set.append({
+                            "name": k.strip(), "value": v.strip(),
+                            "domain": ".bilibili.com", "path": "/",
+                        })
+                if cookies_to_set:
+                    await context.add_cookies(cookies_to_set)
+                    logger.info(f"Injected {len(cookies_to_set)} cookies")
 
-            if not has_more or not page_items:
-                break
-            page += 1
+            page = await context.new_page()
 
-        # 截断
-        if max_items > 0 and len(items) > max_items:
-            items = items[:max_items]
+            # 拦截搜索 API 响应
+            async def on_response(response):
+                url = response.url
+                # B站空间视频列表 API
+                if "/x/space/wbi/arc/search" in url or "/x/space/arc/search" in url:
+                    try:
+                        data = await response.json()
+                        if data.get("code") == 0:
+                            xhr_data.append(data)
+                            total = sum(
+                                len(d.get("data", {}).get("list", {}).get("vlist", []))
+                                for d in xhr_data
+                            )
+                            logger.info(f"Captured search API: {total} videos so far")
+                            if progress_callback:
+                                await progress_callback(total, max_items, "running")
+                    except Exception:
+                        pass
 
-        # 3. 批量获取互动数据（点赞、转发、收藏等）
+            page.on("response", on_response)
+
+            # 导航到空间视频页
+            logger.info(f"Navigating to: {space_url}")
+            try:
+                await page.goto(space_url, wait_until="domcontentloaded", timeout=45000)
+            except Exception as e:
+                logger.warning(f"Navigation incomplete: {e}")
+            await asyncio.sleep(3)
+
+            # 滚动加载更多
+            logger.info("Scrolling to load more videos...")
+            prev_total = 0
+            no_new = 0
+            for i in range(20):
+                current_total = sum(
+                    len(d.get("data", {}).get("list", {}).get("vlist", []))
+                    for d in xhr_data
+                )
+                if max_items > 0 and current_total >= max_items:
+                    logger.info(f"Reached max_items={max_items}")
+                    break
+                if current_total == prev_total:
+                    no_new += 1
+                    if no_new >= 5:
+                        break
+                else:
+                    no_new = 0
+                prev_total = current_total
+                if i % 3 == 0:
+                    logger.info(f"Scroll {i+1}/20: {current_total} videos so far")
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await asyncio.sleep(2)
+
+            await browser.close()
+
+        # 解析视频列表
+        items = self._parse_xhr_data(xhr_data, max_items)
+
+        # 提取作者信息
+        for d in xhr_data:
+            vlist = d.get("data", {}).get("list", {}).get("vlist", [])
+            if vlist:
+                # 从页面数据提取（如果有），否则从第一个视频推测
+                pass
+            break
+
+        # 用第一个视频的信息 + 单独的 API 获取用户信息
+        creator_info = await self._fetch_creator_info(mid)
+
+        # 批量获取准确互动数据
         if items:
             logger.info(f"Fetching detailed stats for {len(items)} videos...")
             await self._enrich_with_stats(items)
@@ -151,88 +160,25 @@ class BilibiliAdapter(BasePlatformAdapter):
         )
         return creator_info, items
 
-    async def _fetch_user_info(self, mid: str) -> CreatorInfo:
-        """获取用户基本信息"""
-        url = "https://api.bilibili.com/x/space/wbi/acc/info"
-        try:
-            params = _sign_params({"mid": mid})
-            resp = Fetcher.get(url, params=params, headers=BILIBILI_HEADERS,
-                              cookies=_session_cookies if _session_cookies else None)
-            if resp.status != 200:
-                logger.warning(f"User info API returned {resp.status}")
-                return CreatorInfo()
-
-            data = resp.json()
-            if data.get("code") != 0:
-                logger.warning(f"User info API error: code={data.get('code')}, msg={data.get('message')}")
-                return CreatorInfo()
-
-            user = data.get("data", {})
-            # 获取粉丝数 (单独接口)
-            follower_count = await self._fetch_follower_count(mid)
-
-            return CreatorInfo(
-                nickname=user.get("name", ""),
-                signature=user.get("sign", ""),
-                avatar_url=user.get("face", ""),
-                follower_count=follower_count,
-                extra_info={
-                    "mid": mid,
-                    "level": user.get("level", 0),
-                    "sex": user.get("sex", ""),
-                    "official": user.get("official", {}),
-                },
-            )
-        except Exception as e:
-            logger.error(f"Failed to fetch user info: {e}")
-            return CreatorInfo()
-
-    async def _fetch_video_page(
-        self, mid: str, page: int, page_size: int
-    ) -> tuple[list[ContentItem], bool]:
-        """获取一页视频列表。返回 (items, has_more)"""
-        url = "https://api.bilibili.com/x/space/wbi/arc/search"
-        try:
-            params = _sign_params({
-                "mid": mid,
-                "ps": page_size,
-                "pn": page,
-                "order": "pubdate",
-            })
-            resp = Fetcher.get(url, params=params, headers=BILIBILI_HEADERS,
-                              cookies=_session_cookies if _session_cookies else None)
-            if resp.status != 200:
-                logger.warning(f"Video list API returned {resp.status}")
-                return [], False
-
-            data = resp.json()
-            if data.get("code") != 0:
-                logger.warning(f"Video list API error: code={data.get('code')}, msg={data.get('message')}")
-                return [], False
-
-            page_data = data.get("data", {})
-            vlist = page_data.get("list", {}).get("vlist", [])
-
-            items = []
+    def _parse_xhr_data(self, xhr_data: list[dict], max_items: int) -> list[ContentItem]:
+        """解析拦截到的搜索 API JSON"""
+        items: list[ContentItem] = []
+        seen = set()
+        for data in xhr_data:
+            vlist = data.get("data", {}).get("list", {}).get("vlist", [])
             for v in vlist:
-                # 发布时间
+                aid = str(v.get("aid", ""))
+                if aid in seen:
+                    continue
+                seen.add(aid)
+
                 created = v.get("created", 0)
                 create_dt = datetime.fromtimestamp(created) if created else None
-
-                # 时长 — B站返回的是 "mm:ss" 格式字符串
                 length_str = v.get("length", "0:00")
                 duration = self._parse_duration(length_str)
 
-                # aid 作为 content_id，bvid 存 extra
-                aid = str(v.get("aid", ""))
-
-                # B站搜索API字段映射：
-                #   comment = 弹幕(danmaku), video_review = 评论
-                #   play = 播放量, favorites(如有) = 收藏
-                #   likes/shares/coins 需通过 stat API 批量获取
-                danmaku = v.get("comment", 0)  # 这是弹幕数
-                comments = v.get("video_review", 0)  # 这是评论数
-
+                # 搜索 API 字段：
+                #   comment = 弹幕, video_review = 评论, play = 播放
                 items.append(ContentItem(
                     content_id=aid,
                     content_type=ContentType.VIDEO,
@@ -243,37 +189,86 @@ class BilibiliAdapter(BasePlatformAdapter):
                     url=f"https://www.bilibili.com/video/av{aid}" if aid else "",
                     tags=[],
                     music_title="",
-                    likes=0,        # 下面批量获取
-                    comments=comments,
-                    shares=0,       # 下面批量获取
+                    likes=0,  # 下面批量获取
+                    comments=v.get("video_review", 0),
+                    shares=0,  # 下面批量获取
                     plays=v.get("play", 0),
-                    collects=v.get("favorites", 0),  # 列表API可能有
+                    collects=v.get("favorites", 0),
                     extra_data={
                         "bvid": v.get("bvid", ""),
                         "aid": aid,
-                        "danmaku": danmaku,
+                        "danmaku": v.get("comment", 0),
                         "description": v.get("description", ""),
                     },
                 ))
+                if max_items > 0 and len(items) >= max_items:
+                    return items
+        return items
 
-            has_more = len(vlist) >= page_size
-            return items, has_more
+    async def _fetch_creator_info(self, mid: str) -> CreatorInfo:
+        """获取用户基本信息"""
+        from scrapling.fetchers import Fetcher
 
+        try:
+            resp = Fetcher.get(
+                "https://api.bilibili.com/x/space/wbi/acc/info",
+                params={"mid": mid},
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Referer": f"https://space.bilibili.com/{mid}",
+                },
+            )
+            if resp.status == 200 and resp.json().get("code") == 0:
+                user = resp.json()["data"]
+                # 粉丝数
+                follower_count = await self._fetch_follower_count(mid)
+                return CreatorInfo(
+                    nickname=user.get("name", ""),
+                    signature=user.get("sign", ""),
+                    avatar_url=user.get("face", ""),
+                    follower_count=follower_count,
+                    extra_info={
+                        "mid": mid, "level": user.get("level", 0),
+                        "sex": user.get("sex", ""),
+                    },
+                )
         except Exception as e:
-            logger.error(f"Failed to fetch video page {page}: {e}")
-            return [], False
+            logger.warning(f"Failed to fetch creator info via HTTP: {e}")
+
+        return CreatorInfo()
+
+    async def _fetch_follower_count(self, mid: str) -> int:
+        """获取粉丝数"""
+        from scrapling.fetchers import Fetcher
+        try:
+            resp = Fetcher.get(
+                "https://api.bilibili.com/x/relation/stat",
+                params={"vmid": mid},
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Referer": f"https://space.bilibili.com/{mid}",
+                },
+            )
+            if resp.status == 200 and resp.json().get("code") == 0:
+                return resp.json().get("data", {}).get("follower", 0)
+        except Exception as e:
+            logger.warning(f"Failed to fetch follower count: {e}")
+        return 0
 
     async def _enrich_with_stats(self, items: list[ContentItem]):
-        """逐个获取视频详细互动数据（view API 无需 WBI 签名，数据最准确）"""
-        view_url = "https://api.bilibili.com/x/web-interface/view"
+        """逐个获取视频详细互动数据（view API 无需签名，数据最准确）"""
+        from scrapling.fetchers import Fetcher
+
         enriched = 0
         for item in items:
             try:
                 resp = Fetcher.get(
-                    view_url,
+                    "https://api.bilibili.com/x/web-interface/view",
                     params={"aid": item.content_id},
-                    headers=BILIBILI_HEADERS,
-                    cookies=_session_cookies if _session_cookies else None,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        "Referer": "https://www.bilibili.com/",
+                    },
                 )
                 if resp.status != 200:
                     continue
@@ -291,39 +286,21 @@ class BilibiliAdapter(BasePlatformAdapter):
                     item.extra_data["danmaku"] = stat.get("danmaku", 0)
                     item.extra_data["coin"] = stat.get("coin", 0)
 
-                    # 视频标签
                     tags = data.get("data", {}).get("tabs", [])
                     if tags:
                         item.tags = [t.get("name", "") for t in tags if t.get("name")]
 
                 enriched += 1
-                # 小延迟避免触发频率限制
                 if enriched % 10 == 0:
                     logger.info(f"Stats enriched: {enriched}/{len(items)}")
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.3)
             except Exception as e:
-                logger.warning(f"Failed to fetch stats for aid={item.content_id}: {e}")
+                logger.warning(f"Failed stats for aid={item.content_id}: {e}")
 
         logger.info(f"Stats enriched: {enriched}/{len(items)} videos")
 
-    async def _fetch_follower_count(self, mid: str) -> int:
-        """获取粉丝数"""
-        try:
-            params = _sign_params({"vmid": mid})
-            resp = Fetcher.get(
-                "https://api.bilibili.com/x/relation/stat",
-                params=params,
-                headers=BILIBILI_HEADERS,
-            )
-            if resp.status == 200 and resp.json().get("code") == 0:
-                return resp.json().get("data", {}).get("follower", 0)
-        except Exception as e:
-            logger.warning(f"Failed to fetch follower count: {e}")
-        return 0
-
     @staticmethod
     def _parse_duration(length: str) -> float:
-        """将 "mm:ss" 或 "hh:mm:ss" 转为秒"""
         parts = length.split(":")
         if len(parts) == 2:
             return int(parts[0]) * 60 + int(parts[1])
