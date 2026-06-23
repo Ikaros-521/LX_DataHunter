@@ -12,7 +12,7 @@ const queryClient = new QueryClient({
     mutations: { retry: 0 },
   },
   queryCache: new QueryCache({
-    onError: (error: any, query) => {
+    onError: (error: any, _query) => {
       // 查询错误统一提示（mutation 错误由 axios 拦截器处理）
       const detail = error?.response?.data?.detail || error?.message || '未知错误';
       const status = error?.response?.status || 0;
