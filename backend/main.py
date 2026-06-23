@@ -126,8 +126,35 @@ async def health():
 
 
 static_dir = settings.static_dir
+
+# API 路由之外的请求都走 SPA (StaticFiles 不 mount 到 "/" 避免覆盖 API)
 if static_dir.exists() and list(static_dir.glob("index.html")):
-    app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
+    # 静态资源 (js/css/assets) 用 StaticFiles
+    app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="static_assets")
+    favicon = static_dir / "favicon.ico"
+    if favicon.exists():
+        app.mount("/favicon.ico", StaticFiles(directory=str(static_dir)), name="static_favicon")
+    if (static_dir / "icons.svg").exists():
+        app.mount("/icons.svg", StaticFiles(directory=str(static_dir)), name="static_icons")
+
+    # SPA 兜底: 所有非 API 路由返回 index.html
+    from fastapi.responses import FileResponse
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str):
+        # 排除 API 和 WebSocket
+        if full_path.startswith("api/") or full_path.startswith("ws/"):
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        index_path = static_dir / "index.html"
+        if index_path.exists():
+            return FileResponse(index_path, media_type="text/html")
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"detail": "Frontend not built — run `cd frontend && npm run build`"}, status_code=404)
+
+    @app.get("/")
+    async def root():
+        return FileResponse(static_dir / "index.html", media_type="text/html")
+
 else:
     @app.get("/")
     async def root():
