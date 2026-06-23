@@ -1,8 +1,11 @@
 """Schedule configuration endpoints."""
+import logging
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+
+logger = logging.getLogger("fapai.schedules")
 from backend.database import get_db
 from backend.models import ScheduleConfig, MonitoredCreator
 from backend.schemas import ScheduleUpsert, ScheduleResponse

@@ -1,8 +1,11 @@
 """Crawl session endpoints."""
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func
 from backend.database import get_db
+
+logger = logging.getLogger("fapai.sessions")
 from backend.models import CrawlSession, MonitoredCreator
 from backend.schemas import SessionResponse, SessionListResponse
 

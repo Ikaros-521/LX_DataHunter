@@ -1,7 +1,10 @@
 """FastAPI application entry point."""
+import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from .api.creators import router as creators_router
 from .api.platforms import router as platforms_router
@@ -13,19 +16,66 @@ from .config import settings
 from .database import engine
 from .models import Base
 
+# ---- Logging ----
+logging.basicConfig(
+    level=getattr(logging, settings.log_level),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("fapai")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from .engine.scheduler import start_scheduler, stop_scheduler
+    logger.info("Starting FaPai Spider...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    logger.info("Database tables ensured")
     start_scheduler()
+    logger.info("Scheduler started")
     yield
     stop_scheduler()
     await engine.dispose()
+    logger.info("FaPai Spider stopped")
 
 
 app = FastAPI(title="FaPai Spider", version="0.1.0", lifespan=lifespan)
+
+# ---- Request logging middleware ----
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.time()
+    response = await call_next(request)
+    elapsed = time.time() - start
+    status = response.status_code
+    level = logging.WARNING if status >= 400 else logging.INFO
+    logger.log(level, f"{request.method} {request.url.path} -> {status} ({elapsed:.2f}s)")
+    return response
+
+# ---- Global error handler ----
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    from fastapi.exceptions import HTTPException
+    if isinstance(exc, HTTPException):
+        # Let FastAPI handle HTTPExceptions normally, but log them
+        logger.warning(
+            f"HTTP {exc.status_code} on {request.method} {request.url.path}: {exc.detail}"
+        )
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=getattr(exc, "headers", None),
+        )
+    logger.error(
+        f"Unhandled error on {request.method} {request.url.path}: {exc}",
+        exc_info=True,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal server error: {exc}"},
+    )
+
 
 app.include_router(creators_router)
 app.include_router(platforms_router)
@@ -33,6 +83,7 @@ app.include_router(sessions_router)
 app.include_router(contents_router)
 app.include_router(schedules_router)
 app.include_router(ws_router)
+
 
 @app.get("/api/health")
 async def health():

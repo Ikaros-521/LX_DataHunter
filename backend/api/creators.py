@@ -1,4 +1,5 @@
 """Creator CRUD + trigger crawl."""
+import logging
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
@@ -10,6 +11,7 @@ from backend.schemas import (
 )
 from backend.engine.crawler import crawl_creator
 
+logger = logging.getLogger("fapai.creators")
 router = APIRouter(prefix="/api/v1/creators", tags=["creators"])
 
 async def _to_response(creator: MonitoredCreator, db: AsyncSession) -> dict:
@@ -59,6 +61,8 @@ async def _to_response(creator: MonitoredCreator, db: AsyncSession) -> dict:
 
 @router.post("", response_model=CreatorResponse, status_code=201)
 async def add_creator(body: CreatorCreate, db: AsyncSession = Depends(get_db)):
+    logger.info(f"Adding creator: platform={body.platform.value}, uid={body.platform_uid}")
+
     # Check duplicate
     existing = await db.execute(
         select(MonitoredCreator).where(
@@ -66,8 +70,17 @@ async def add_creator(body: CreatorCreate, db: AsyncSession = Depends(get_db)):
             MonitoredCreator.platform_uid == body.platform_uid,
         )
     )
-    if existing.scalar_one_or_none():
-        raise HTTPException(409, "Creator already exists")
+    dup = existing.scalar_one_or_none()
+    if dup:
+        detail = (
+            f"Creator already exists: "
+            f"platform={body.platform.value}, "
+            f"uid={body.platform_uid}, "
+            f"existing_id={dup.id}, "
+            f"existing_nickname='{dup.nickname or '(not crawled yet)'}'"
+        )
+        logger.warning(f"409 Conflict: {detail}")
+        raise HTTPException(status_code=409, detail=detail)
 
     creator = MonitoredCreator(
         platform=body.platform.value,
@@ -76,6 +89,7 @@ async def add_creator(body: CreatorCreate, db: AsyncSession = Depends(get_db)):
     db.add(creator)
     await db.commit()
     await db.refresh(creator, ["schedule"])
+    logger.info(f"Creator created: id={creator.id}")
     return await _to_response(creator, db)
 
 @router.get("", response_model=CreatorListResponse)
@@ -116,10 +130,11 @@ async def get_creator(creator_id: int, db: AsyncSession = Depends(get_db)):
 async def delete_creator(creator_id: int, db: AsyncSession = Depends(get_db)):
     creator = await db.get(MonitoredCreator, creator_id)
     if not creator:
-        raise HTTPException(404, "Creator not found")
+        raise HTTPException(404, f"Creator not found: id={creator_id}")
+    logger.info(f"Deleting creator: id={creator.id}, platform={creator.platform}, uid={creator.platform_uid}")
     await db.delete(creator)
     await db.commit()
-    return {"message": "Deleted"}
+    return {"message": f"Deleted creator id={creator_id}"}
 
 @router.post("/{creator_id}/crawl", response_model=TriggerCrawlResponse, status_code=202)
 async def trigger_crawl(
@@ -129,7 +144,17 @@ async def trigger_crawl(
 ):
     creator = await db.get(MonitoredCreator, creator_id)
     if not creator:
-        raise HTTPException(404, "Creator not found")
+        raise HTTPException(404, f"Creator not found: id={creator_id}")
+
+    # Check not already running
+    running_check = await db.execute(
+        select(CrawlSession).where(
+            CrawlSession.creator_id == creator.id,
+            CrawlSession.status == SessionStatus.RUNNING.value,
+        )
+    )
+    if running_check.scalar_one_or_none():
+        raise HTTPException(409, f"Creator id={creator_id} already has a running crawl")
 
     # Create session immediately
     session = CrawlSession(
@@ -142,6 +167,8 @@ async def trigger_crawl(
     await db.commit()
     await db.refresh(session)
 
+    logger.info(f"Crawl triggered: creator_id={creator.id}, session_id={session.id}")
+
     # Run crawl in background
     background_tasks.add_task(_run_crawl, creator, session.id)
 
@@ -150,11 +177,12 @@ async def trigger_crawl(
 async def _run_crawl(creator: MonitoredCreator, session_id: int):
     """Background task wrapper."""
     from backend.database import AsyncSessionLocal
+    logger.info(f"Background crawl starting: session_id={session_id}")
     async with AsyncSessionLocal() as db:
-        # Reload within this session
         c = await db.get(MonitoredCreator, creator.id)
         session = await db.get(CrawlSession, session_id)
         if not c or not session:
+            logger.error(f"Background crawl failed: creator or session not found")
             return
         try:
             await crawl_creator(
@@ -162,6 +190,6 @@ async def _run_crawl(creator: MonitoredCreator, session_id: int):
                 db=db,
                 trigger_type=TriggerType.MANUAL,
             )
+            logger.info(f"Background crawl completed: session_id={session_id}")
         except Exception as e:
-            # Session was marked failed inside crawl_creator
-            pass
+            logger.error(f"Background crawl failed: session_id={session_id}, error={e}", exc_info=True)
