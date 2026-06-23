@@ -196,40 +196,60 @@ class BilibiliAdapter(BasePlatformAdapter):
     @staticmethod
     def _extract_init_state_json(html: str) -> dict | None:
         """从 HTML 中提取 window.__INITIAL_STATE__ 的完整 JSON (手动数括号)"""
+        # 精确匹配 "window.__INITIAL_STATE__ = {"
         marker = "window.__INITIAL_STATE__"
-        idx = html.find(marker)
-        if idx == -1:
-            return None
+        search_from = 0
+        while True:
+            idx = html.find(marker, search_from)
+            if idx == -1:
+                return None
 
-        # 找到 marker 后面的第一个 '{'
-        brace_start = html.find("{", idx + len(marker))
-        if brace_start == -1:
-            return None
+            # 跳过 " = " 或 "=" 找到 {
+            after_marker = html[idx + len(marker):idx + len(marker) + 20]
+            eq_pos = after_marker.find("=")
+            if eq_pos == -1:
+                search_from = idx + len(marker)
+                continue
+            brace_start = after_marker.find("{", eq_pos)
+            if brace_start == -1:
+                search_from = idx + len(marker)
+                continue
 
-        # 数括号匹配完整的 JSON 对象
-        depth = 0
-        pos = brace_start
-        while pos < len(html):
-            ch = html[pos]
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    json_str = html[brace_start:pos + 1]
-                    return json.loads(json_str)
-            elif ch == '"':
-                # 跳过字符串，处理转义
-                pos += 1
-                while pos < len(html):
-                    if html[pos] == '\\':
-                        pos += 2
-                        continue
-                    if html[pos] == '"':
-                        break
+            # 从 HTML 全局位置开始数括号
+            abs_brace = idx + len(marker) + brace_start
+            depth = 0
+            pos = abs_brace
+            while pos < len(html):
+                ch = html[pos]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        json_str = html[abs_brace:pos + 1]
+                        try:
+                            return json.loads(json_str)
+                        except json.JSONDecodeError:
+                            # 继续找下一个 marker
+                            search_from = idx + len(marker)
+                            break
+                elif ch == '"':
                     pos += 1
-            pos += 1
+                    while pos < len(html):
+                        if html[pos] == '\\':
+                            pos += 2
+                            continue
+                        if html[pos] == '"':
+                            break
+                        pos += 1
+                pos += 1
+            else:
+                # 到 HTML 末尾未闭合
+                break
 
+            # 继续搜索下一个 marker
+
+        logger.warning("__INITIAL_STATE__: not found or unparseable")
         return None
 
     async def _enrich_stats_with_browser(self, items: list[ContentItem], cookies: dict):
@@ -275,7 +295,13 @@ class BilibiliAdapter(BasePlatformAdapter):
                     html = await page.content()
                     state = self._extract_init_state_json(html)
                     if not state:
-                        logger.debug(f"No __INITIAL_STATE__ for {bvid}")
+                        # 诊断：检查 __INITIAL_STATE__ 是否存在
+                        marker_pos = html.find("window.__INITIAL_STATE__")
+                        if marker_pos == -1:
+                            logger.warning(f"No __INITIAL_STATE__ in HTML for {bvid} (len={len(html)})")
+                        else:
+                            snippet = html[marker_pos:marker_pos + 120]
+                            logger.warning(f"__INITIAL_STATE__ found but unparseable for {bvid}: snippet={snippet}")
                         continue
 
                     stat = state.get("videoData", {}).get("stat", {})
@@ -303,7 +329,10 @@ class BilibiliAdapter(BasePlatformAdapter):
 
             await browser.close()
 
-        logger.info(f"Stats enriched: {enriched}/{len(items)}")
+        if enriched == 0 and len(items) > 0:
+            logger.warning(f"Stats enrichment got 0/{len(items)} — check if video pages have __INITIAL_STATE__")
+        else:
+            logger.info(f"Stats enriched: {enriched}/{len(items)}")
 
     @staticmethod
     def _parse_duration(length: str) -> float:
