@@ -34,9 +34,16 @@ app.include_router(contents_router)
 app.include_router(schedules_router)
 app.include_router(ws_router)
 
-# Will mount static files in later tasks
-
-
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+static_dir = settings.static_dir
+if static_dir.exists() and list(static_dir.glob("index.html")):
+    app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
+else:
+    @app.get("/")
+    async def root():
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse("/docs")
