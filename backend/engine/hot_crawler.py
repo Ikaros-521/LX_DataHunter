@@ -142,7 +142,7 @@ async def _bili_hot(max_items: int, cred: Credential | None) -> list[ContentItem
     from datetime import datetime
 
     try:
-        data = sync(hot.get_hot_videos(credential=cred))
+        data = sync(hot.get_hot_videos())
     except Exception as e:
         logger.error(f"B站 hot API failed: {e}")
         return []
@@ -182,7 +182,7 @@ async def _bili_weekly(max_items: int, cred: Credential | None) -> list[ContentI
     from datetime import datetime
 
     try:
-        data = sync(hot.get_weekly_hot_videos_list(credential=cred))
+        data = sync(hot.get_weekly_hot_videos_list())
     except Exception as e:
         logger.error(f"B站 weekly API failed: {e}")
         return []
