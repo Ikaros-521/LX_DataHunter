@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Card, Row, Col, Select, InputNumber, Button, message, Spin, Tag } from 'antd';
+import { Card, Row, Col, Select, Input, InputNumber, Button, message, Spin, Tag } from 'antd';
 import { FireOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client from '../api/client';
@@ -14,6 +14,7 @@ export default function HotCrawl() {
   const [platform, setPlatform] = useState('bilibili');
   const [category, setCategory] = useState('');
   const [maxItems, setMaxItems] = useState(50);
+  const [keyword, setKeyword] = useState('');
   const [watchingSession, setWatchingSession] = useState<number | null>(null);
   const progress = useCrawlProgress(watchingSession);
 
@@ -35,7 +36,8 @@ export default function HotCrawl() {
 
   const handleCrawl = () => {
     if (!category) { message.warning('请选择分类'); return; }
-    crawlMut.mutate({ platform, category, max_items: maxItems });
+    if (category === 'search' && !keyword) { message.warning('请输入搜索关键词'); return; }
+    crawlMut.mutate({ platform, category, max_items: maxItems, keyword });
   };
 
   return (
@@ -67,6 +69,13 @@ export default function HotCrawl() {
                 }))} />
             )}
           </Col>
+          {category === 'search' && (
+            <Col span={24}>
+              <div style={{ marginBottom: 4, fontWeight: 500 }}>搜索关键词</div>
+              <Input value={keyword} onChange={e => setKeyword(e.target.value)}
+                placeholder="输入搜索关键词" />
+            </Col>
+          )}
           <Col span={12}>
             <div style={{ marginBottom: 4, fontWeight: 500 }}>爬取数量</div>
             <InputNumber min={1} max={200} value={maxItems} onChange={v => setMaxItems(v || 50)}

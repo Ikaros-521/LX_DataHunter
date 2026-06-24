@@ -18,6 +18,7 @@ class HotCrawlRequest(BaseModel):
     platform: str
     category: str
     max_items: int = Field(default=50, ge=1, le=200)
+    keyword: str = Field(default="", description="搜索关键词 (category=search 时使用)")
 
 
 @router.get("/categories")
@@ -81,12 +82,12 @@ async def trigger_hot_crawl(
 
     logger.info(f"Hot crawl triggered: platform={body.platform}, category={body.category}, session_id={session.id}")
 
-    background_tasks.add_task(_run_hot_crawl, body.platform, body.category, body.max_items, creator.id, session.id)
+    background_tasks.add_task(_run_hot_crawl, body.platform, body.category, body.max_items, creator.id, session.id, body.keyword)
 
     return {"session_id": session.id, "message": f"Hot crawl started: {body.platform}/{body.category}"}
 
 
-async def _run_hot_crawl(platform: str, category: str, max_items: int, creator_id: int, session_id: int):
+async def _run_hot_crawl(platform: str, category: str, max_items: int, creator_id: int, session_id: int, keyword: str = ""):
     """后台执行热门爬取"""
     from backend.engine.crawler import _sum_engagement
     from backend.models import ContentSnapshot
@@ -106,6 +107,7 @@ async def _run_hot_crawl(platform: str, category: str, max_items: int, creator_i
                 max_items=max_items,
                 credential_str=cookie_str,
                 progress_callback=on_progress,
+                keyword=keyword,
             )
 
             # 更新创作者昵称
