@@ -17,7 +17,7 @@ HOT_CATEGORIES = {
         {"id": "hot", "name": "热门视频", "desc": "当前正在流行的热门视频"},
     ],
     "douyin": [
-        {"id": "hot", "name": "抖音热点", "desc": "抖音热点内容 (需登录)"},
+        {"id": "hot", "name": "热点榜", "desc": "抖音实时热点榜单"},
     ],
 }
 
@@ -205,9 +205,104 @@ async def _enrich_bili_stats(items: list[ContentItem], cred: Credential | None):
 
 
 async def _crawl_douyin_hot(max_items: int, cookie_str: str | None) -> list[ContentItem]:
-    """抖音热点 (Phase 2)"""
-    logger.warning("Douyin hot crawl not yet implemented")
-    return []
+    """抖音热点榜 — Playwright 浏览器加载页面 + 拦截 API"""
+    import os
+    from datetime import datetime
+    from playwright.async_api import async_playwright
+
+    chrome_paths = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    ]
+    chrome_exe = next((p for p in chrome_paths if os.path.exists(p)), None)
+
+    xhr_data: list[dict] = []
+    items: list[ContentItem] = []
+
+    async with async_playwright() as p:
+        launch_args = {
+            "headless": True,
+            "args": ["--no-sandbox", "--disable-setuid-sandbox"],
+        }
+        if chrome_exe:
+            launch_args["executable_path"] = chrome_exe
+
+        browser = await p.chromium.launch(**launch_args)
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
+            locale="zh-CN",
+            viewport={"width": 1280, "height": 800},
+        )
+        page = await context.new_page()
+
+        async def on_response(response):
+            url = response.url
+            # 拦截热点相关的 API
+            if "/aweme/v1/web/hot/search/list" in url or "/aweme/v1/web/hot/search/video/list" in url:
+                try:
+                    data = await response.json()
+                    xhr_data.append(data)
+                    logger.info(f"Captured Douyin hot API: {len(data.get('data', {}).get('word_list', data.get('data', [])))} items")
+                except Exception:
+                    pass
+
+        page.on("response", on_response)
+
+        # 加载热点页面
+        logger.info("Loading Douyin hot page...")
+        try:
+            await page.goto("https://www.douyin.com/hot", wait_until="domcontentloaded", timeout=30000)
+        except Exception as e:
+            logger.warning(f"Douyin hot page load: {e}")
+        await asyncio.sleep(5)
+
+        await browser.close()
+
+    # 解析数据
+    for data in xhr_data:
+        word_list = data.get("data", {}).get("word_list", []) or data.get("data", [])
+        for w in word_list:
+            aweme_info = w.get("aweme_info", {})
+            if not aweme_info:
+                continue
+
+            aid = str(aweme_info.get("aweme_id", ""))
+            stats = aweme_info.get("statistics", {})
+            video = aweme_info.get("video", {})
+            author = aweme_info.get("author", {})
+
+            ct = aweme_info.get("create_time", 0)
+            create_dt = datetime.fromtimestamp(ct) if ct else None
+
+            items.append(ContentItem(
+                content_id=aid,
+                content_type=ContentType.VIDEO,
+                title=aweme_info.get("desc", ""),
+                cover_url=(video.get("cover", {}) or {}).get("url_list", [""])[0],
+                create_time=create_dt,
+                duration_sec=round((video.get("duration", 0) or 0) / 1000, 1),
+                url=f"https://www.douyin.com/video/{aid}",
+                tags=[],
+                music_title=(aweme_info.get("music", {}) or {}).get("title", ""),
+                likes=stats.get("digg_count", 0),
+                comments=stats.get("comment_count", 0),
+                shares=stats.get("share_count", 0),
+                plays=stats.get("play_count", 0),
+                collects=stats.get("collect_count", 0),
+                extra_data={
+                    "author": author.get("nickname", ""),
+                    "hot_word": w.get("word", ""),
+                    "hot_position": w.get("position", 0),
+                    "hot_value": w.get("hot_value", 0),
+                },
+            ))
+            if max_items > 0 and len(items) >= max_items:
+                break
+        if max_items > 0 and len(items) >= max_items:
+            break
+
+    logger.info(f"Douyin hot parsed: {len(items)} items")
+    return items
 
 
 def _parse_duration(length) -> float:

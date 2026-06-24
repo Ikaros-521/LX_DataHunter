@@ -53,7 +53,7 @@ export default function HotCrawl() {
               style={{ width: '100%' }}
               options={[
                 { label: 'B站', value: 'bilibili' },
-                { label: '抖音 (即将支持)', value: 'douyin', disabled: true },
+                { label: '抖音', value: 'douyin' },
               ]} />
           </Col>
           <Col span={24}>
