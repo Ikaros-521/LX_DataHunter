@@ -235,14 +235,28 @@ async def _crawl_douyin_hot(max_items: int, cookie_str: str | None) -> list[Cont
         )
         page = await context.new_page()
 
+        # 同时拦截视频详情 API（获取 stat）
+        video_details: dict[str, dict] = {}
+
         async def on_response(response):
             url = response.url
-            # 拦截热点相关的 API
-            if "/aweme/v1/web/hot/search/list" in url or "/aweme/v1/web/hot/search/video/list" in url:
+            if "/aweme/v1/web/hot/search/list" in url:
                 try:
                     data = await response.json()
                     xhr_data.append(data)
-                    logger.info(f"Captured Douyin hot API: {len(data.get('data', {}).get('word_list', data.get('data', [])))} items")
+                    d = data.get("data", {})
+                    tl = d.get("trending_list", [])
+                    wl = d.get("word_list", [])
+                    logger.info(f"Captured Douyin hot: trending={len(tl)}, words={len(wl)}")
+                except Exception:
+                    pass
+            elif "/aweme/v1/web/aweme/detail" in url:
+                try:
+                    detail = await response.json()
+                    aweme = detail.get("aweme_detail", {})
+                    if aweme:
+                        aid = str(aweme.get("aweme_id", ""))
+                        video_details[aid] = aweme
                 except Exception:
                     pass
 
@@ -256,34 +270,55 @@ async def _crawl_douyin_hot(max_items: int, cookie_str: str | None) -> list[Cont
             logger.warning(f"Douyin hot page load: {e}")
         await asyncio.sleep(5)
 
+        # 点击几个视频卡片触发详情加载
+        try:
+            cards = await page.query_selector_all('[data-e2e="trending-card"]')
+            for card in cards[:min(len(cards), 5)]:
+                try:
+                    await card.click()
+                    await asyncio.sleep(1)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         await browser.close()
 
-    # 解析数据
+    # 解析 trending_list
     for data in xhr_data:
-        word_list = data.get("data", {}).get("word_list", []) or data.get("data", [])
-        for w in word_list:
-            aweme_info = w.get("aweme_info", {})
-            if not aweme_info:
+        trending = data.get("data", {}).get("trending_list", [])
+        for t in trending:
+            gid = str(t.get("group_id", ""))
+            if not gid:
                 continue
 
-            aid = str(aweme_info.get("aweme_id", ""))
-            stats = aweme_info.get("statistics", {})
-            video = aweme_info.get("video", {})
-            author = aweme_info.get("author", {})
+            # 从视频详情中获取 stat
+            detail = video_details.get(gid, {})
+            stats = detail.get("statistics", {})
+            video = detail.get("video", {})
+            author = detail.get("author", {})
+            music = detail.get("music", {})
 
-            ct = aweme_info.get("create_time", 0)
+            ct = t.get("event_time", 0) or detail.get("create_time", 0)
             create_dt = datetime.fromtimestamp(ct) if ct else None
 
+            cover = ""
+            wc = t.get("word_cover", {})
+            if wc and wc.get("url_list"):
+                cover = wc["url_list"][0]
+            if not cover and video.get("cover"):
+                cover = (video["cover"].get("url_list", [""]) or [""])[0]
+
             items.append(ContentItem(
-                content_id=aid,
+                content_id=gid,
                 content_type=ContentType.VIDEO,
-                title=aweme_info.get("desc", ""),
-                cover_url=(video.get("cover", {}) or {}).get("url_list", [""])[0],
+                title=detail.get("desc", "") or t.get("word", ""),
+                cover_url=cover,
                 create_time=create_dt,
                 duration_sec=round((video.get("duration", 0) or 0) / 1000, 1),
-                url=f"https://www.douyin.com/video/{aid}",
+                url=f"https://www.douyin.com/video/{gid}",
                 tags=[],
-                music_title=(aweme_info.get("music", {}) or {}).get("title", ""),
+                music_title=(music or {}).get("title", ""),
                 likes=stats.get("digg_count", 0),
                 comments=stats.get("comment_count", 0),
                 shares=stats.get("share_count", 0),
@@ -291,9 +326,9 @@ async def _crawl_douyin_hot(max_items: int, cookie_str: str | None) -> list[Cont
                 collects=stats.get("collect_count", 0),
                 extra_data={
                     "author": author.get("nickname", ""),
-                    "hot_word": w.get("word", ""),
-                    "hot_position": w.get("position", 0),
-                    "hot_value": w.get("hot_value", 0),
+                    "hot_word": t.get("word", ""),
+                    "video_count": t.get("video_count", 0),
+                    "discuss_video_count": t.get("discuss_video_count", 0),
                 },
             ))
             if max_items > 0 and len(items) >= max_items:
@@ -301,7 +336,7 @@ async def _crawl_douyin_hot(max_items: int, cookie_str: str | None) -> list[Cont
         if max_items > 0 and len(items) >= max_items:
             break
 
-    logger.info(f"Douyin hot parsed: {len(items)} items")
+    logger.info(f"Douyin hot parsed: {len(items)} items (from {len(xhr_data)} API responses, {len(video_details)} video details)")
     return items
 
 
