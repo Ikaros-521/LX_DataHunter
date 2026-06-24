@@ -17,8 +17,7 @@ HOT_CATEGORIES = {
         {"id": "hot", "name": "热门视频", "desc": "当前正在流行的热门视频"},
     ],
     "douyin": [
-        {"id": "hot", "name": "热点榜", "desc": "抖音实时热点榜单"},
-        {"id": "search", "name": "搜索", "desc": "输入关键词搜索视频 (需在下方输入搜索词)"},
+        {"id": "hot", "name": "热点榜", "desc": "抖音实时热点榜单 (仅关键词，无详细互动数据)"},
     ],
 }
 
@@ -209,8 +208,8 @@ async def _enrich_bili_stats(items: list[ContentItem], cred: Credential | None):
 
 
 async def _crawl_douyin_hot(category: str, max_items: int, cookie_str: str | None, keyword: str = "") -> list[ContentItem]:
-    """抖音热点/搜索 — Playwright 加载页面 + 逐个视频页提取 __INITIAL_STATE__"""
-    import os, json, re
+    """抖音热点榜 — 爬取热点关键词和趋势"""
+    import os
     from datetime import datetime
     from playwright.async_api import async_playwright
 
@@ -221,7 +220,7 @@ async def _crawl_douyin_hot(category: str, max_items: int, cookie_str: str | Non
     chrome_exe = next((p for p in chrome_paths if os.path.exists(p)), None)
 
     xhr_data: list[dict] = []
-    group_ids: list[str] = []
+    items: list[ContentItem] = []
 
     async with async_playwright() as p:
         launch_args = {"headless": True, "args": ["--no-sandbox", "--disable-setuid-sandbox"]}
@@ -236,114 +235,57 @@ async def _crawl_douyin_hot(category: str, max_items: int, cookie_str: str | Non
         page = await context.new_page()
 
         async def on_response(response):
-            if "/aweme/v1/web/hot/search/list" in response.url or "/aweme/v1/web/search/item" in response.url:
+            if "/aweme/v1/web/hot/search/list" in response.url:
                 try:
                     xhr_data.append(await response.json())
                 except Exception:
                     pass
         page.on("response", on_response)
 
-        # 加载页面
-        if category == "search" and keyword:
-            # 搜索
-            search_url = f"https://www.douyin.com/search/{keyword}?type=general"
-            logger.info(f"Loading Douyin search: {search_url}")
-        else:
-            search_url = "https://www.douyin.com/hot"
-            logger.info("Loading Douyin hot page...")
-
+        logger.info("Loading Douyin hot page...")
         try:
-            await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+            await page.goto("https://www.douyin.com/hot", wait_until="domcontentloaded", timeout=30000)
         except Exception as e:
-            logger.warning(f"Douyin page load: {e}")
+            logger.warning(f"Douyin hot page load: {e}")
         await asyncio.sleep(5)
-
-        # 滚动加载更多
-        for _ in range(5):
-            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await asyncio.sleep(2)
-
-        # 提取 group_id 列表
-        for data in xhr_data:
-            data_section = data.get("data", {})
-            # 热点榜
-            for t in data_section.get("trending_list", []):
-                gid = str(t.get("group_id", ""))
-                if gid and gid not in group_ids:
-                    group_ids.append(gid)
-            # 搜索结果
-            for item in data_section.get("data", []) or data_section.get("aweme_list", []):
-                aweme = item.get("aweme_info", item)
-                gid = str(aweme.get("aweme_id", "") or aweme.get("group_id", ""))
-                if gid and gid not in group_ids:
-                    group_ids.append(gid)
-
-        if not group_ids:
-            logger.warning("No group_ids found, trying page content...")
-            html = await page.content()
-            # Try to find any aweme_id in the HTML
-            ids = re.findall(r'"aweme_id"\s*:\s*"(\d+)"', html)
-            group_ids = list(dict.fromkeys(ids))[:max_items]
-
-        logger.info(f"Found {len(group_ids)} video IDs, enriching stats via video pages...")
-
-        # 逐个视频页提取 stat
-        items: list[ContentItem] = []
-        for gid in group_ids[:max_items]:
-            try:
-                vid_url = f"https://www.douyin.com/video/{gid}"
-                await page.goto(vid_url, wait_until="domcontentloaded", timeout=20000)
-                await asyncio.sleep(2)
-
-                html = await page.content()
-                match = re.search(r'window\.__INITIAL_STATE__\s*=\s*(\{.+?\});\s*</script>', html, re.DOTALL)
-                if not match:
-                    match = re.search(r'"aweme_detail":(\{.+?\})\s*,\s*"aweme_list"', html, re.DOTALL)
-                if not match:
-                    continue
-
-                state_str = match.group(1)
-                # 尝试解析（可能不完整）
-                try:
-                    state = json.loads(state_str)
-                except json.JSONDecodeError:
-                    continue
-
-                aweme = state.get("aweme_detail", state)
-                stats = aweme.get("statistics", {})
-                video = aweme.get("video", {})
-                author = aweme.get("author", {})
-                music = aweme.get("music", {})
-
-                ct = aweme.get("create_time", 0)
-                create_dt = datetime.fromtimestamp(ct) if ct else None
-
-                items.append(ContentItem(
-                    content_id=gid,
-                    content_type=ContentType.VIDEO,
-                    title=aweme.get("desc", ""),
-                    cover_url=(video.get("cover", {}) or {}).get("url_list", [""])[0],
-                    create_time=create_dt,
-                    duration_sec=round((video.get("duration", 0) or 0) / 1000, 1),
-                    url=f"https://www.douyin.com/video/{gid}",
-                    tags=[],
-                    music_title=(music or {}).get("title", ""),
-                    likes=stats.get("digg_count", 0),
-                    comments=stats.get("comment_count", 0),
-                    shares=stats.get("share_count", 0),
-                    plays=stats.get("play_count", 0),
-                    collects=stats.get("collect_count", 0),
-                    extra_data={"author": author.get("nickname", ""), "source": category},
-                ))
-                logger.info(f"Video {len(items)}/{len(group_ids[:max_items])}: {aweme.get('desc', '')[:30]}... likes={stats.get('digg_count', 0)}")
-
-            except Exception as e:
-                logger.warning(f"Video {gid} stat failed: {e}")
-                continue
 
         await browser.close()
 
-    logger.info(f"Douyin {category} parsed: {len(items)} items")
+    # 解析热点关键词和趋势视频
+    for data in xhr_data:
+        trending = data.get("data", {}).get("trending_list", [])
+        for t in trending:
+            gid = str(t.get("group_id", ""))
+            ct = t.get("event_time", 0)
+            cover = ""
+            wc = t.get("word_cover", {})
+            if wc and wc.get("url_list"):
+                cover = wc["url_list"][0]
+
+            items.append(ContentItem(
+                content_id=gid,
+                content_type=ContentType.VIDEO,
+                title=t.get("word", ""),
+                cover_url=cover,
+                create_time=datetime.fromtimestamp(ct) if ct else None,
+                duration_sec=0,
+                url=f"https://www.douyin.com/video/{gid}" if gid else "",
+                tags=[],
+                music_title="",
+                likes=0, comments=0, shares=0, plays=0, collects=0,
+                extra_data={
+                    "hot_value": t.get("hot_value", 0),
+                    "video_count": t.get("video_count", 0),
+                    "discuss_video_count": t.get("discuss_video_count", 0),
+                    "source": "douyin_hot",
+                },
+            ))
+            if max_items > 0 and len(items) >= max_items:
+                break
+        if max_items > 0 and len(items) >= max_items:
+            break
+
+    logger.info(f"Douyin hot parsed: {len(items)} trend items")
     return items
 
 
