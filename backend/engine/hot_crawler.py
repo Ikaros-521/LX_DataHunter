@@ -101,7 +101,7 @@ async def _bili_ranking(max_items: int, cred: Credential | None) -> list[Content
     from datetime import datetime
 
     try:
-        data = sync(rank.get_rank(credential=cred))
+        data = sync(rank.get_rank())
     except Exception as e:
         logger.error(f"B站 rank API failed: {e}")
         return []
