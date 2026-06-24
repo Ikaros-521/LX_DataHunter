@@ -15,7 +15,6 @@ HOT_CATEGORIES = {
     "bilibili": [
         {"id": "ranking", "name": "全站排行榜", "desc": "B站每日综合排行榜 Top 100"},
         {"id": "hot", "name": "热门视频", "desc": "当前正在流行的热门视频"},
-        {"id": "weekly", "name": "每周必看", "desc": "B站官方每周精选视频"},
     ],
     "douyin": [
         {"id": "hot", "name": "抖音热点", "desc": "抖音热点内容 (需登录)"},
@@ -91,8 +90,6 @@ async def _crawl_bilibili_hot(category: str, max_items: int, cookie_str: str | N
         return await _bili_ranking(max_items, cred)
     elif category == "hot":
         return await _bili_hot(max_items, cred)
-    elif category == "weekly":
-        return await _bili_weekly(max_items, cred)
     return []
 
 
@@ -176,44 +173,6 @@ async def _bili_hot(max_items: int, cred: Credential | None) -> list[ContentItem
             break
     return items
 
-
-async def _bili_weekly(max_items: int, cred: Credential | None) -> list[ContentItem]:
-    """B站每周必看"""
-    from datetime import datetime
-
-    try:
-        data = sync(hot.get_weekly_hot_videos_list())
-    except Exception as e:
-        logger.error(f"B站 weekly API failed: {e}")
-        return []
-
-    items = []
-    for v in data.get("list", []):
-        aid = str(v.get("aid", ""))
-        stat = v.get("stat", {})
-        items.append(ContentItem(
-            content_id=aid,
-            content_type=ContentType.VIDEO,
-            title=v.get("title", ""),
-            cover_url=v.get("pic", ""),
-            create_time=datetime.fromtimestamp(v.get("pubdate", 0)) if v.get("pubdate") else None,
-            duration_sec=_parse_duration(v.get("duration", "0:00")),
-            url=v.get("short_link_v2", "") or f"https://www.bilibili.com/video/av{aid}",
-            likes=stat.get("like", 0),
-            comments=stat.get("reply", 0),
-            shares=stat.get("share", 0),
-            plays=stat.get("view", 0),
-            collects=stat.get("favorite", 0),
-            extra_data={
-                "bvid": v.get("bvid", ""),
-                "author": v.get("owner", {}).get("name", ""),
-                "danmaku": stat.get("danmaku", 0),
-                "coin": stat.get("coin", 0),
-            },
-        ))
-        if max_items > 0 and len(items) >= max_items:
-            break
-    return items
 
 
 async def _enrich_bili_stats(items: list[ContentItem], cred: Credential | None):
