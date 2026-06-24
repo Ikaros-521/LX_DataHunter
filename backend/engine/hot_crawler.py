@@ -251,8 +251,13 @@ async def _crawl_douyin_hot(max_items: int, cookie_str: str | None) -> list[Cont
     return []
 
 
-def _parse_duration(length: str) -> float:
-    parts = length.split(":")
+def _parse_duration(length) -> float:
+    """解析时长：支持 "mm:ss" 字符串或整数秒"""
+    if isinstance(length, (int, float)):
+        return float(length)
+    if not length:
+        return 0
+    parts = str(length).split(":")
     if len(parts) == 2:
         return int(parts[0]) * 60 + int(parts[1])
     elif len(parts) == 3:
