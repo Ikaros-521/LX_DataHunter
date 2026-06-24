@@ -1,7 +1,7 @@
 import { Layout, Menu, Typography } from 'antd';
 import {
   DashboardOutlined, UserOutlined, SearchOutlined,
-  ThunderboltOutlined, KeyOutlined, ClockCircleOutlined,
+  ThunderboltOutlined, KeyOutlined, ClockCircleOutlined, FireOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -14,6 +14,7 @@ const menuItems = [
   { key: '/search', icon: <SearchOutlined />, label: '内容检索' },
   { key: '/credentials', icon: <KeyOutlined />, label: '凭证管理' },
   { key: '/schedules', icon: <ClockCircleOutlined />, label: '定时任务' },
+  { key: '/hot', icon: <FireOutlined />, label: '热门爬取' },
 ];
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
