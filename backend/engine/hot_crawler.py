@@ -236,6 +236,8 @@ async def _crawl_douyin_hot(category: str, max_items: int, cookie_str: str | Non
 
         # 注入 Cookie (必须在 goto 之前)
         cookie_count = 0
+        douyin_auth_keys = {"sso_uid_tt", "sessionid", "sessionid_ss", "sid_guard", "uid_tt", "passport_csrf_token"}
+        has_auth_cookies = False
         if cookie_str:
             for item in cookie_str.split(";"):
                 item = item.strip()
@@ -244,9 +246,11 @@ async def _crawl_douyin_hot(category: str, max_items: int, cookie_str: str | Non
                     try:
                         await context.add_cookies([{"name": k.strip(), "value": v.strip(), "domain": ".douyin.com", "path": "/"}])
                         cookie_count += 1
+                        if k.strip() in douyin_auth_keys:
+                            has_auth_cookies = True
                     except Exception:
                         pass
-        logger.info(f"Injected {cookie_count} cookies for Douyin")
+        logger.info(f"Injected {cookie_count} cookies (auth_keys_present={has_auth_cookies})")
 
         page = await context.new_page()
 
@@ -263,25 +267,33 @@ async def _crawl_douyin_hot(category: str, max_items: int, cookie_str: str | Non
             logger.warning(f"Load failed: {e}")
         await asyncio.sleep(5)
 
-        # 检测登录墙
+        # 检测是否已登录（URL 含 login/passport 说明未登录）
         current_url = page.url
-        if "login" in current_url or "passport" in current_url:
-            logger.warning(f"Login wall at: {current_url}")
+        is_login_page = "login" in current_url or "passport" in current_url
+
+        if is_login_page:
+            logger.warning(f"Not logged in (current URL: {current_url})")
+
             if headless:
-                logger.error("Douyin requires login but HEADLESS=True. "
-                            "Please add Douyin cookies via 凭证管理 page, or set headless=False.")
+                logger.error("Douyin requires login. Headless mode cannot show QR code. "
+                            "Please use 凭证管理 to save Douyin cookies first (浏览器登录).")
                 await browser.close()
                 return items
-            # 非 headless: 等待用户扫码
-            logger.info("Waiting for manual login (120s timeout)... Open the browser window and scan QR code.")
+
+            # 非 headless: 用户可以在弹出窗口中扫码
+            logger.info("═" * 50)
+            logger.info("Browser window opened — please scan QR code to login (120s timeout)")
+            logger.info("═" * 50)
             try:
-                await page.wait_for_url(f"**/search/**", timeout=120000)
-                logger.info("Login successful, continuing...")
+                await page.wait_for_url("**/search/**", timeout=120000)
+                logger.info("Login detected, continuing crawl...")
                 await asyncio.sleep(3)
             except Exception:
-                logger.error("Login timeout after 120s")
+                logger.error("Login timeout (120s) — user did not complete login")
                 await browser.close()
                 return items
+        else:
+            logger.info(f"Already logged in (current URL: {current_url})")
 
         # 如果是搜索页，尝试点击筛选
         if category == "search":
