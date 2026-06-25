@@ -17,7 +17,8 @@ HOT_CATEGORIES = {
         {"id": "hot", "name": "热门视频", "desc": "当前正在流行的热门视频"},
     ],
     "douyin": [
-        {"id": "hot", "name": "热点榜", "desc": "抖音实时热点榜单 (仅关键词，无详细互动数据)"},
+        {"id": "hot", "name": "热点榜", "desc": "抖音实时热点榜单"},
+        {"id": "search", "name": "搜索", "desc": "关键词搜索 (需输入搜索词 + 浏览器登录)"},
     ],
 }
 
@@ -208,8 +209,8 @@ async def _enrich_bili_stats(items: list[ContentItem], cred: Credential | None):
 
 
 async def _crawl_douyin_hot(category: str, max_items: int, cookie_str: str | None, keyword: str = "") -> list[ContentItem]:
-    """抖音热点榜 — 爬取热点关键词和趋势"""
-    import os
+    """抖音热点/搜索 — Playwright 加载页面 + 点击筛选器"""
+    import os, re
     from datetime import datetime
     from playwright.async_api import async_playwright
 
@@ -219,11 +220,10 @@ async def _crawl_douyin_hot(category: str, max_items: int, cookie_str: str | Non
     ]
     chrome_exe = next((p for p in chrome_paths if os.path.exists(p)), None)
 
-    xhr_data: list[dict] = []
     items: list[ContentItem] = []
 
     async with async_playwright() as p:
-        launch_args = {"headless": True, "args": ["--no-sandbox", "--disable-setuid-sandbox"]}
+        launch_args = {"headless": False, "args": ["--no-sandbox", "--disable-setuid-sandbox"]}
         if chrome_exe:
             launch_args["executable_path"] = chrome_exe
 
@@ -232,60 +232,118 @@ async def _crawl_douyin_hot(category: str, max_items: int, cookie_str: str | Non
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
             locale="zh-CN", viewport={"width": 1280, "height": 800},
         )
+
+        # 注入 Cookie
+        if cookie_str:
+            for item in cookie_str.split(";"):
+                item = item.strip()
+                if "=" in item:
+                    k, _, v = item.partition("=")
+                    try:
+                        await context.add_cookies([{"name": k.strip(), "value": v.strip(), "domain": ".douyin.com", "path": "/"}])
+                    except Exception:
+                        pass
+
         page = await context.new_page()
 
-        async def on_response(response):
-            if "/aweme/v1/web/hot/search/list" in response.url:
-                try:
-                    xhr_data.append(await response.json())
-                except Exception:
-                    pass
-        page.on("response", on_response)
+        # 选 URL
+        if category == "search" and keyword:
+            url = f"https://www.douyin.com/search/{keyword}?type=general"
+        else:
+            url = "https://www.douyin.com/hot"
 
-        logger.info("Loading Douyin hot page...")
+        logger.info(f"Loading Douyin: {url}")
         try:
-            await page.goto("https://www.douyin.com/hot", wait_until="domcontentloaded", timeout=30000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         except Exception as e:
-            logger.warning(f"Douyin hot page load: {e}")
+            logger.warning(f"Load failed: {e}")
         await asyncio.sleep(5)
+
+        # 检测登录墙
+        if "login" in page.url or "passport" in page.url:
+            logger.warning("Login wall detected — Douyin search requires login")
+            # 等待用户手动登录（headless=False 时可见窗口）
+            if not launch_args["headless"]:
+                logger.info("Please log in via the browser window (60s timeout)...")
+                try:
+                    await page.wait_for_url("**/search/**", timeout=60000)
+                    logger.info("Login detected, continuing...")
+                    await asyncio.sleep(3)
+                except Exception:
+                    logger.error("Login timeout")
+                    await browser.close()
+                    return items
+
+        # 如果是搜索页，尝试点击筛选
+        if category == "search":
+            try:
+                # 关闭可能的弹窗
+                close_btns = await page.query_selector_all('[class*="close" i], [class*="Close" i]')
+                for btn in close_btns[:3]:
+                    try:
+                        await btn.click(timeout=2000)
+                        await asyncio.sleep(1)
+                    except Exception:
+                        pass
+
+                # 点击 "筛选"
+                filter_btn = page.locator('text=筛选').first
+                if await filter_btn.count() > 0:
+                    await filter_btn.click(timeout=5000)
+                    await asyncio.sleep(2)
+
+                    # 点 "最多点赞"
+                    sort_btn = page.locator('text=最多点赞').first
+                    if await sort_btn.count() > 0:
+                        await sort_btn.click(timeout=5000)
+                        await asyncio.sleep(3)
+                        logger.info("Applied sort: 最多点赞")
+
+                    # 再点筛选 → 选 "一周内"
+                    filter_btn2 = page.locator('text=筛选').first
+                    if await filter_btn2.count() > 0:
+                        await filter_btn2.click(timeout=5000)
+                        await asyncio.sleep(2)
+
+                    week_btn = page.locator('text=一周内').first
+                    if await week_btn.count() > 0:
+                        await week_btn.click(timeout=5000)
+                        await asyncio.sleep(3)
+                        logger.info("Applied filter: 一周内")
+            except Exception as e:
+                logger.warning(f"Filter interaction failed: {e}")
+
+        # 滚动加载
+        for i in range(10):
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(2)
+            if i % 3 == 0:
+                html = await page.content()
+                ids = re.findall(r'"aweme_id"\s*:\s*"(\d+)"', html)
+                logger.info(f"Scroll {i+1}: {len(set(ids))} unique aweme_ids found")
+
+        # 从 DOM 提取视频数据
+        html = await page.content()
+        # 尝试匹配搜索结果中的视频卡片 JSON
+        pattern = r'\{"aweme_id":"(\d+)","desc":"([^"]*)".*?"digg_count":(\d+).*?"comment_count":(\d+).*?"share_count":(\d+).*?"play_count":(\d+)'
+        for m in re.finditer(pattern, html, re.DOTALL):
+            aid, desc, likes, comments, shares, plays = m.group(1), m.group(2), int(m.group(3)), int(m.group(4)), int(m.group(5)), int(m.group(6))
+            if aid not in {i.content_id for i in items}:
+                items.append(ContentItem(
+                    content_id=aid, content_type=ContentType.VIDEO,
+                    title=desc, cover_url="",
+                    create_time=None, duration_sec=0,
+                    url=f"https://www.douyin.com/video/{aid}",
+                    tags=[], music_title="",
+                    likes=likes, comments=comments, shares=shares, plays=plays, collects=0,
+                    extra_data={"source": category, "keyword": keyword},
+                ))
+                if max_items > 0 and len(items) >= max_items:
+                    break
 
         await browser.close()
 
-    # 解析热点关键词和趋势视频
-    for data in xhr_data:
-        trending = data.get("data", {}).get("trending_list", [])
-        for t in trending:
-            gid = str(t.get("group_id", ""))
-            ct = t.get("event_time", 0)
-            cover = ""
-            wc = t.get("word_cover", {})
-            if wc and wc.get("url_list"):
-                cover = wc["url_list"][0]
-
-            items.append(ContentItem(
-                content_id=gid,
-                content_type=ContentType.VIDEO,
-                title=t.get("word", ""),
-                cover_url=cover,
-                create_time=datetime.fromtimestamp(ct) if ct else None,
-                duration_sec=0,
-                url=f"https://www.douyin.com/video/{gid}" if gid else "",
-                tags=[],
-                music_title="",
-                likes=0, comments=0, shares=0, plays=0, collects=0,
-                extra_data={
-                    "hot_value": t.get("hot_value", 0),
-                    "video_count": t.get("video_count", 0),
-                    "discuss_video_count": t.get("discuss_video_count", 0),
-                    "source": "douyin_hot",
-                },
-            ))
-            if max_items > 0 and len(items) >= max_items:
-                break
-        if max_items > 0 and len(items) >= max_items:
-            break
-
-    logger.info(f"Douyin hot parsed: {len(items)} trend items")
+    logger.info(f"Douyin {category} parsed: {len(items)} items")
     return items
 
 
