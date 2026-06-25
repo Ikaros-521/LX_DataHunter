@@ -267,12 +267,14 @@ async def _crawl_douyin_hot(category: str, max_items: int, cookie_str: str | Non
             logger.warning(f"Load failed: {e}")
         await asyncio.sleep(5)
 
-        # 检测是否已登录（URL 含 login/passport 说明未登录）
-        current_url = page.url
-        is_login_page = "login" in current_url or "passport" in current_url
+        # 检测是否已登录（DOM 检测：有登录按钮 = 未登录）
+        login_btn = await page.query_selector('text=登录')
+        if not login_btn:
+            login_btn = await page.query_selector('[data-e2e="login"], [class*="login-btn" i], [class*="LoginButton" i]')
+        is_login_page = login_btn is not None
 
         if is_login_page:
-            logger.warning(f"Not logged in (current URL: {current_url})")
+            logger.warning("Not logged in — login button detected on page")
 
             if headless:
                 logger.error("Douyin requires login. Headless mode cannot show QR code. "
@@ -285,15 +287,25 @@ async def _crawl_douyin_hot(category: str, max_items: int, cookie_str: str | Non
             logger.info("Browser window opened — please scan QR code to login (120s timeout)")
             logger.info("═" * 50)
             try:
-                await page.wait_for_url("**/search/**", timeout=120000)
-                logger.info("Login detected, continuing crawl...")
-                await asyncio.sleep(3)
+                for _ in range(60):  # 60 * 2s = 120s
+                    await asyncio.sleep(2)
+                    login_btn = await page.query_selector('text=登录')
+                    if not login_btn:
+                        login_btn = await page.query_selector('[data-e2e="login"], [class*="login-btn" i]')
+                    if login_btn is None:
+                        logger.info("Login detected (login button disappeared), continuing...")
+                        await asyncio.sleep(3)
+                        break
+                else:
+                    logger.error("Login timeout (120s)")
+                    await browser.close()
+                    return items
             except Exception:
-                logger.error("Login timeout (120s) — user did not complete login")
+                logger.error("Login timeout (120s)")
                 await browser.close()
                 return items
         else:
-            logger.info(f"Already logged in (current URL: {current_url})")
+            logger.info("Already logged in (no login button detected)")
 
         # 如果是搜索页，尝试点击筛选
         if category == "search":

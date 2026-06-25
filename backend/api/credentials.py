@@ -86,12 +86,7 @@ LOGIN_URLS = {
     "xiaohongshu": "https://www.xiaohongshu.com/",
 }
 
-LOGIN_DETECT = {
-    "douyin": lambda url: "login" not in url and "passport" not in url and "douyin.com" in url,
-    "bilibili": lambda page_title: page_title and "个人中心" in page_title,
-    "kuaishou": lambda url: "www.kuaishou.com" in url and "login" not in url,
-    "xiaohongshu": lambda url: "www.xiaohongshu.com" in url and "login" not in url,
-}
+LOGIN_DETECT = None  # 改用 DOM 检测替代 URL 检测
 
 
 @router.post("/auto-login")
@@ -133,29 +128,35 @@ async def auto_login(platform: str, headless: bool = False):
         logger.info(f"Navigating to login page: {login_url}")
         await page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
 
-        # 等待用户完成登录（最多 5 分钟）
+        # 等待用户完成登录（最多 5 分钟），使用 DOM 检测登录状态
         logger.info(f"Waiting for user to log in (timeout: 300s)...")
-        detector = LOGIN_DETECT.get(platform, lambda x: True)
 
         try:
             for _ in range(150):  # 150 * 2s = 300s 超时
                 await asyncio.sleep(2)
                 try:
-                    current_url = page.url
-                    page_title = await page.title()
-
                     if platform == "bilibili":
-                        # B站检测：URL 变为首页且不再在登录页
-                        logged_in = "passport" not in current_url and "login" not in current_url
+                        # B站：检查页面上是否有登录按钮（未登录）vs 用户头像（已登录）
+                        login_btn = await page.query_selector('text=登录')
+                        avatar = await page.query_selector('[class*="header-login-avatar"], [class*="bili-avatar"]')
+                        logged_in = avatar is not None and login_btn is None
                     elif platform == "douyin":
-                        # 抖音检测：URL 不再是 login/passport
-                        logged_in = "login" not in current_url and "passport" not in current_url
+                        # 抖音：检查右上角是否有登录按钮（"登录" 文字按钮）vs 用户头像
+                        login_btn = await page.query_selector('text=登录')
+                        # 抖音右上角登录按钮通常在一个特定容器里
+                        if not login_btn:
+                            login_btn = await page.query_selector('[data-e2e="login"], [class*="login-btn"], [class*="LoginButton"]')
+                        # 用户头像/消息按钮（登录后出现）
+                        avatar = await page.query_selector('[data-e2e="user-avatar"], [class*="avatar"], [class*="Avatar"], [class*="header-right"] img')
+                        logged_in = avatar is not None and login_btn is None
                     else:
-                        logged_in = "login" not in current_url
+                        # 通用：检查登录按钮是否消失
+                        login_btn = await page.query_selector('text=登录')
+                        logged_in = login_btn is None
 
                     if logged_in:
-                        logger.info(f"Login detected for {platform} at {current_url}")
-                        await asyncio.sleep(3)  # 等 cookie 完全写入
+                        logger.info(f"Login detected for {platform} (DOM check: login_btn gone, avatar present)")
+                        await asyncio.sleep(3)
                         break
                 except Exception:
                     continue
