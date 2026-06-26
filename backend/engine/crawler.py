@@ -35,6 +35,20 @@ async def crawl_creator(
         f"uid={creator.platform_uid}, trigger={trigger_type.value}, max_items={max_items}"
     )
 
+    # 热门/搜索类虚拟创作者 (uid 形如 __hot__{platform}_{category}) 不能走
+    # 适配器的「按 UID 抓主页」流程（会访问不存在的 /user/__hot__...），
+    # 必须转交给 crawl_hot。这里统一拦截，覆盖手动触发和定时调度两条路径。
+    if creator.platform_uid.startswith("__hot__"):
+        return await _crawl_hot_virtual(
+            creator=creator,
+            db=db,
+            trigger_type=trigger_type,
+            max_items=max_items,
+            headless=headless,
+            progress_callback=progress_callback,
+            existing_session_id=existing_session_id,
+        )
+
     # 1. Create or reuse session
     if existing_session_id:
         session = await db.get(CrawlSession, existing_session_id)
@@ -172,6 +186,141 @@ async def crawl_creator(
     logger.info(f"Crawl completed: session_id={session.id}, total_contents={len(items)}")
 
     # 7. Final progress update
+    if progress_callback:
+        try:
+            await progress_callback(len(items), len(items), "completed")
+        except Exception:
+            pass
+
+    return session
+
+
+async def _crawl_hot_virtual(
+    creator: MonitoredCreator,
+    db: AsyncSession,
+    trigger_type: TriggerType = TriggerType.MANUAL,
+    max_items: int = 50,
+    headless: bool = True,
+    progress_callback: Any = None,
+    existing_session_id: Optional[int] = None,
+) -> CrawlSession:
+    """处理 __hot__{platform}_{category} 虚拟创作者 —— 转交给 crawl_hot。
+
+    uid 形如 __hot__douyin_search：去掉前缀后剩余部分为 "{platform}_{category}"。
+    platform 一定在 HOT_CATEGORIES 支持的平台集合内，剩余即为 category。
+    """
+    from .hot_crawler import crawl_hot
+    from backend.api.credentials import get_active_cookie
+
+    # 解析 platform / category：前缀之后的部分。注意 category 可能不含 '_'，
+    # 但 platform 来自固定的几个已知平台，据此切分。
+    payload = creator.platform_uid[len("__hot__"):]  # e.g. "douyin_search"
+    category = payload
+    # payload 形如 "{platform}_{category}"，platform 与 creator.platform 相同，
+    # 去掉 "{platform}_" 前缀即为 category
+    prefix = f"{creator.platform}_"
+    if payload.startswith(prefix):
+        category = payload[len(prefix):]
+
+    # 1. Create or reuse session（与 crawl_creator 保持一致）
+    if existing_session_id:
+        session = await db.get(CrawlSession, existing_session_id)
+        if not session:
+            raise ValueError(f"Session {existing_session_id} not found")
+        logger.info(f"Reusing existing session: id={session.id}")
+    else:
+        session = CrawlSession(
+            creator_id=creator.id,
+            platform=creator.platform,
+            trigger_type=trigger_type.value,
+            status=SessionStatus.RUNNING.value,
+        )
+        db.add(session)
+        await db.commit()
+        await db.refresh(session)
+        logger.info(f"Session created (hot virtual): id={session.id}")
+
+    logger.info(
+        f"Hot virtual crawl: platform={creator.platform}, category={category}, "
+        f"session={session.id}, max={max_items}"
+    )
+
+    # search 类需要关键词；虚拟创作者的 uid 不携带关键词，
+    # 通过「创作者管理→爬取」或定时调度触发搜索类虚拟创作者没有意义，
+    # 这里标记 session 为 FAILED 并报错，避免空转抓到无关的热点内容。
+    if category == "search":
+        msg = "搜索类任务需要关键词，不能直接触发。请在「热门内容」页输入关键词后再抓取。"
+        logger.warning(f"Search virtual creator {creator.platform_uid} triggered without keyword.")
+        session.status = SessionStatus.FAILED.value
+        session.error_message = msg
+        session.finished_at = beijing_now()
+        await db.commit()
+        raise ValueError(msg)
+
+    # 2. 获取凭证
+    cookie_str = None
+    try:
+        cookie_str = await get_active_cookie(creator.platform, db)
+    except Exception as e:
+        logger.warning(f"Failed to look up credential: {e}")
+
+    # 3. 执行 crawl_hot
+    try:
+        creator_label, items = await crawl_hot(
+            platform=creator.platform,
+            category=category,
+            max_items=max_items,
+            credential_str=cookie_str,
+            progress_callback=progress_callback,
+        )
+        logger.info(f"crawl_hot returned: {len(items)} items, label='{creator_label}'")
+    except Exception as e:
+        logger.error(f"Hot virtual crawl failed: {e}", exc_info=True)
+        session.status = SessionStatus.FAILED.value
+        session.error_message = str(e)[:500]
+        session.finished_at = beijing_now()
+        await db.commit()
+        raise
+
+    # 4. 更新昵称
+    if creator_label:
+        creator.nickname = creator_label
+    creator.updated_at = beijing_now()
+
+    # 5. 写入 snapshots
+    for item in items:
+        snap = ContentSnapshot(
+            session_id=session.id,
+            content_id=item.content_id,
+            content_type=item.content_type.value,
+            title=item.title,
+            cover_url=item.cover_url,
+            create_time=item.create_time,
+            duration_sec=item.duration_sec,
+            url=item.url,
+            tags=item.tags,
+            music_title=item.music_title,
+            likes=item.likes,
+            comments=item.comments,
+            shares=item.shares,
+            plays=item.plays,
+            collects=item.collects,
+            extra_data=item.extra_data,
+        )
+        db.add(snap)
+
+    # 6. Finalize session
+    engagement = _sum_engagement(items)
+    session.status = SessionStatus.COMPLETED.value
+    session.finished_at = beijing_now()
+    session.total_contents = len(items)
+    session.engagement_total = engagement
+    session.delta_from_prev = {}
+
+    await db.commit()
+    await db.refresh(session)
+    logger.info(f"Hot virtual crawl completed: session_id={session.id}, total={len(items)}")
+
     if progress_callback:
         try:
             await progress_callback(len(items), len(items), "completed")

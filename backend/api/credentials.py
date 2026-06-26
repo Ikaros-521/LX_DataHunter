@@ -86,12 +86,63 @@ LOGIN_URLS = {
     "xiaohongshu": "https://www.xiaohongshu.com/",
 }
 
-LOGIN_DETECT = None  # 改用 DOM 检测替代 URL 检测
+# 登录态标识 Cookie —— 这些 cookie 只有真正登录后才会出现，
+# 用作 DOM 检测之后的二次校验，防止误判（例如首页 feed 里的头像导致的假阳性）。
+AUTH_COOKIES = {
+    "douyin": {"sessionid", "sessionid_ss", "sid_guard", "sid_tt", "uid_tt_ss"},
+    "bilibili": {"SESSDATA", "bili_jct", "DedeUserID"},
+    "kuaishou": {"kuaishou.server.web_st", "userId", "passToken"},
+    "xiaohongshu": {"web_session", "customer-session"},
+}
+
+
+async def _check_logged_in_dom(platform: str, page) -> bool:
+    """通过右上角 DOM 判断是否已登录。
+
+    只检查页面右上角的「登录入口」与「用户头像」区域，避免匹配到首页
+    feed 流里的作者头像（那些无论登录与否都存在，会导致误判）。
+    """
+    try:
+        if platform == "douyin":
+            # 已登录的确凿信号（基于实际 DOM 验证）：
+            #   1) a[href*="/user/self"] —— 右上角用户头像/昵称的链接，
+            #      登录后必现，且指向本人主页，不会误匹配 feed 流里其他作者的链接
+            #   2) "退出登录" —— 登录后才有的退出按钮
+            # 两者满足其一即认为已登录（不再依赖「登录入口消失」的反向判断，避免
+            # 猜错登录按钮选择器导致永远不触发）。
+            self_link = await page.query_selector('a[href*="/user/self"]')
+            if self_link is not None:
+                return True
+            logout_btn = await page.query_selector('text=退出登录')
+            return logout_btn is not None
+        elif platform == "bilibili":
+            login_btn = await page.query_selector('text=登录')
+            avatar = await page.query_selector(
+                '[class*="header-login-avatar"], [class*="bili-avatar"]'
+            )
+            return avatar is not None and login_btn is None
+        else:
+            # 通用：登录按钮消失即视为已登录
+            login_btn = await page.query_selector('text=登录')
+            return login_btn is None
+    except Exception as e:
+        logger.debug(f"DOM login check error: {e}")
+        return False
+
+
+def _has_auth_cookies(platform: str, cookies: list[dict]) -> bool:
+    """检查 cookie 中是否存在登录态标识，作为 DOM 检测的二次保险。"""
+    auth_names = AUTH_COOKIES.get(platform, set())
+    if not auth_names:
+        return True  # 未知平台不做 cookie 校验，仅依赖 DOM
+    names = {c.get("name") for c in cookies}
+    hit = auth_names & names
+    return bool(hit)
 
 
 @router.post("/auto-login")
 async def auto_login(platform: str, headless: bool = False):
-    """打开浏览器让用户登录，自动捕获 Cookie。返回 cookie_str。"""
+    """打开浏览器让用户登录，确认登录成功后再捕获 Cookie。返回 cookie_str。"""
     if platform not in LOGIN_URLS:
         raise HTTPException(400, f"Unsupported platform for auto-login: {platform}")
 
@@ -108,6 +159,10 @@ async def auto_login(platform: str, headless: bool = False):
 
     logger.info(f"Starting auto-login for {platform} (headless={headless})")
 
+    cookies: list[dict] = []
+    logged_in = False
+    last_status = "未检测到登录"
+
     async with async_playwright() as p:
         launch_args = {
             "headless": headless,
@@ -117,55 +172,61 @@ async def auto_login(platform: str, headless: bool = False):
             launch_args["executable_path"] = chrome_exe
 
         browser = await p.chromium.launch(**launch_args)
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
-            locale="zh-CN",
-            viewport={"width": 1280, "height": 800},
-        )
-        page = await context.new_page()
-
-        login_url = LOGIN_URLS[platform]
-        logger.info(f"Navigating to login page: {login_url}")
-        await page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
-
-        # 等待用户完成登录（最多 5 分钟），使用 DOM 检测登录状态
-        logger.info(f"Waiting for user to log in (timeout: 300s)...")
-
         try:
-            for _ in range(150):  # 150 * 2s = 300s 超时
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
+                locale="zh-CN",
+                viewport={"width": 1280, "height": 800},
+            )
+            page = await context.new_page()
+
+            login_url = LOGIN_URLS[platform]
+            logger.info(f"Navigating to login page: {login_url}")
+            await page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
+
+            # 轮询检测登录状态（最多 5 分钟）。双重校验：
+            #   1) 右上角 DOM（登录入口消失 + 用户头像出现）
+            #   2) cookie 中出现登录态标识
+            # 只有两项都通过才认为登录成功，才会捕获 cookie。
+            logger.info(f"Waiting for user to log in (timeout: 300s)...")
+            for i in range(150):  # 150 * 2s = 300s 超时
                 await asyncio.sleep(2)
                 try:
-                    if platform == "bilibili":
-                        # B站：检查页面上是否有登录按钮（未登录）vs 用户头像（已登录）
-                        login_btn = await page.query_selector('text=登录')
-                        avatar = await page.query_selector('[class*="header-login-avatar"], [class*="bili-avatar"]')
-                        logged_in = avatar is not None and login_btn is None
-                    elif platform == "douyin":
-                        # 抖音：检查右上角是否有登录按钮（"登录" 文字按钮）vs 用户头像
-                        login_btn = await page.query_selector('text=登录')
-                        # 抖音右上角登录按钮通常在一个特定容器里
-                        if not login_btn:
-                            login_btn = await page.query_selector('[data-e2e="login"], [class*="login-btn"], [class*="LoginButton"]')
-                        # 用户头像/消息按钮（登录后出现）
-                        avatar = await page.query_selector('[data-e2e="user-avatar"], [class*="avatar"], [class*="Avatar"], [class*="header-right"] img')
-                        logged_in = avatar is not None and login_btn is None
-                    else:
-                        # 通用：检查登录按钮是否消失
-                        login_btn = await page.query_selector('text=登录')
-                        logged_in = login_btn is None
-
-                    if logged_in:
-                        logger.info(f"Login detected for {platform} (DOM check: login_btn gone, avatar present)")
+                    dom_ok = await _check_logged_in_dom(platform, page)
+                    if not dom_ok:
+                        last_status = "未检测到登录（右上角仍有登录入口）"
+                        continue
+                    # DOM 已显示已登录，再用 cookie 二次确认，避免误判
+                    cookies = await context.cookies()
+                    if _has_auth_cookies(platform, cookies):
+                        logged_in = True
+                        # 等待登录态 cookie 完全写入
                         await asyncio.sleep(3)
+                        logger.info(
+                            f"Login confirmed for {platform} "
+                            f"(DOM ✓ + auth cookies ✓: "
+                            f"{sorted(AUTH_COOKIES.get(platform, set()) & {c.get('name') for c in cookies})})"
+                        )
                         break
-                except Exception:
+                    last_status = "DOM 显示已登录，但缺少登录态 cookie，继续等待..."
+                    if i % 5 == 0:
+                        logger.info(last_status)
+                except Exception as e:
+                    logger.debug(f"Login poll error: {e}")
                     continue
-            else:
-                logger.warning(f"Login timeout for {platform}")
+
+            if not logged_in:
+                logger.warning(f"Login not confirmed for {platform}: {last_status}")
         finally:
-            # 无论超时与否，都提取当前 cookie
-            cookies = await context.cookies()
             await browser.close()
+
+    # 关键修复：未确认登录则不返回 cookie，避免捕获到游客/匿名 cookie
+    if not logged_in or not cookies:
+        raise HTTPException(
+            408,
+            f"未检测到登录成功，已放弃捕获 Cookie。请在 5 分钟内完成登录后重试。"
+            f"（最后状态：{last_status}）",
+        )
 
     # 将 Playwright cookies 转为 HTTP Cookie 字符串
     cookie_parts = [f"{c['name']}={c['value']}" for c in cookies

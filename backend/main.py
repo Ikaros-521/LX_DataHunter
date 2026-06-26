@@ -1,5 +1,17 @@
 """FastAPI application entry point."""
+import sys
+import asyncio
 import logging
+
+# Windows 上 uvicorn 在 --reload / --workers>1 时会强制使用
+# WindowsSelectorEventLoopPolicy（见 uvicorn asyncio_setup），而该 loop 不支持
+# 子进程，会导致 Playwright 抓取报 NotImplementedError。这里设回
+# ProactorEventLoop 作为兜底；但 uvicorn 可能先于 import 设置 Selector 策略，
+# 因此 Playwright 抓取本身另由 hot_crawler.run_in_proactor_loop 在独立线程的
+# Proactor loop 中执行，与 uvicorn 的 loop 解耦，确保可靠。
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 import time
 from datetime import datetime
 from contextlib import asynccontextmanager

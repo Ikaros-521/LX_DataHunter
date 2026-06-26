@@ -34,15 +34,23 @@ cd frontend && npm install && npm run build
 ### Run
 
 ```bash
+# 推荐用项目启动入口（Windows 下保证 Playwright 抓取可用）
+python run.py
+
+# 或直接用 uvicorn（注意：不要加 --reload，否则 Windows 下抓取会失败）
 python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
 
 Open http://localhost:8000 for the app, or http://localhost:8000/docs for the API docs.
 
+> **Windows 注意**：不要用 `--reload` 启动后端。uvicorn 的热重载在 Windows 上会
+> 强制使用不支持子进程的 `SelectorEventLoop`，导致抖音/B站的 Playwright 抓取报
+> `NotImplementedError`。开发期改完代码手动重启 `python run.py` 即可。
+
 ### Development
 
 ```bash
-# Backend (auto-reload)
+# Backend：开发时如需热重载，可临时用 --reload，但抓取功能会不可用
 python -m uvicorn backend.main:app --reload --port 8000
 
 # Frontend dev server (port 3000, proxies API to :8000)
