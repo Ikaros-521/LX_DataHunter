@@ -48,6 +48,8 @@ async def run_scheduled_check():
             except Exception:
                 pass
             finally:
+                # 刷新 schedule 以获取可能在爬取期间被 API 修改的 interval_minutes
+                await db.refresh(schedule)
                 schedule.last_run_at = beijing_now()
                 schedule.next_run_at = beijing_now() + timedelta(minutes=schedule.interval_minutes)
                 await db.commit()
