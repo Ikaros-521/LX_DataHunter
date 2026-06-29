@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Descriptions, Space, Button, Drawer, Tag, Row, Col, message } from 'antd';
-import { ThunderboltOutlined } from '@ant-design/icons';
+import { Descriptions, Space, Button, Drawer, Tag, Row, Col, message, Popconfirm } from 'antd';
+import { ThunderboltOutlined, ClearOutlined } from '@ant-design/icons';
 import PlatformTag from '../components/PlatformTag';
 import TrendChart from '../components/TrendChart';
 import ContentTable from '../components/ContentTable';
-import { useCreator, useSessions, useSessionContents, useTriggerCrawl } from '../api/queries';
+import { useCreator, useSessions, useSessionContents, useTriggerCrawl, useClearCreatorSessions } from '../api/queries';
 import dayjs from 'dayjs';
 import type { Content } from '../api/queries';
 
@@ -15,6 +15,7 @@ export default function CreatorDetail() {
   const { data: creator, isLoading } = useCreator(creatorId);
   const { data: sessionsData } = useSessions({ creator_id: creatorId, page_size: 100 });
   const crawlMutation = useTriggerCrawl();
+  const clearSessionsMut = useClearCreatorSessions();
 
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null);
   const [contentPage, setContentPage] = useState(1);
@@ -74,7 +75,20 @@ export default function CreatorDetail() {
       </Row>
 
       <div style={{ marginTop: 24 }}>
-        <h3>爬取历史</h3>
+        <Space style={{ marginBottom: 16 }}>
+          <h3 style={{ margin: 0 }}>爬取历史</h3>
+          {sessions.length > 0 && (
+            <Popconfirm
+              title="确认清除该创作者的所有爬取数据?"
+              description="将删除所有爬取记录和内容数据，此操作不可恢复"
+              onConfirm={() => clearSessionsMut.mutate(creatorId, {
+                onSuccess: (res: any) => message.success(res.data.message),
+              })}
+            >
+              <Button size="small" danger icon={<ClearOutlined />}>清除爬取数据</Button>
+            </Popconfirm>
+          )}
+        </Space>
         <Space wrap style={{ marginBottom: 16 }}>
           {sessions.map(s => (
             <Button

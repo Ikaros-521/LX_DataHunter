@@ -89,6 +89,7 @@ class ScheduleUpsert(BaseModel):
     interval_minutes: int = Field(..., ge=5, le=10080)  # 5min ~ 1 week
     enabled: bool = True
     keyword: str | None = None  # 搜索类任务的关键词
+    max_items: int = 50  # 每次爬取数量
 
 class ScheduleResponse(BaseModel):
     id: int
@@ -138,3 +139,6 @@ class CredentialResponse(BaseModel):
 # ---- Common ----
 class MessageResponse(BaseModel):
     message: str
+
+class BatchDeleteRequest(BaseModel):
+    session_ids: list[int]

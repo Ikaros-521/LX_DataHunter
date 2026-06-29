@@ -1,17 +1,63 @@
-import { useState } from 'react';
-import { Row, Col, Table, Select, Button, Space, Tag, message, InputNumber } from 'antd';
-import { ThunderboltOutlined } from '@ant-design/icons';
+import { useState, useMemo } from 'react';
+import { Row, Col, Table, Select, Button, Space, Tag, message, InputNumber, Popconfirm, Input } from 'antd';
+import { ThunderboltOutlined, DeleteOutlined, ClearOutlined, SearchOutlined } from '@ant-design/icons';
 import CrawlProgress from '../components/CrawlProgress';
 import PlatformTag from '../components/PlatformTag';
-import { useCreators, useSessions, useTriggerCrawl } from '../api/queries';
+import { useCreators, useSessions, useTriggerCrawl, useDeleteSession, useClearAllSessions, useBatchDeleteSessions } from '../api/queries';
 import { useCrawlProgress } from '../hooks/useCrawlProgress';
 import dayjs from 'dayjs';
+import type { Session } from '../api/queries';
+
+const PLATFORM_OPTIONS = [
+  { label: '全部平台', value: '' },
+  { label: '抖音', value: 'douyin' },
+  { label: 'B站', value: 'bilibili' },
+  { label: '快手', value: 'kuaishou' },
+  { label: '小红书', value: 'xiaohongshu' },
+];
+
+const STATUS_OPTIONS = [
+  { label: '全部状态', value: '' },
+  { label: '已完成', value: 'completed' },
+  { label: '失败', value: 'failed' },
+  { label: '运行中', value: 'running' },
+];
 
 export default function CrawlerConsole() {
   const [selectedCreator, setSelectedCreator] = useState<number | null>(null);
   const { data: creatorsData } = useCreators({ page_size: 200 });
-  const { data: sessionsData, isLoading } = useSessions({ page_size: 20 });
   const crawlMutation = useTriggerCrawl();
+  const deleteSessionMut = useDeleteSession();
+  const clearAllMut = useClearAllSessions();
+  const batchDeleteMut = useBatchDeleteSessions();
+
+  // 筛选状态
+  const [filterPlatform, setFilterPlatform] = useState<string>('');
+  const [filterStatus, setFilterStatus] = useState<string>('');
+  const [filterNickname, setFilterNickname] = useState<string>('');
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+
+  // 构建查询参数
+  const queryParams = useMemo(() => {
+    const params: Record<string, any> = { page, page_size: pageSize };
+    if (filterPlatform) params.platform = filterPlatform;
+    if (filterStatus) params.status = filterStatus;
+    if (filterNickname) params.search = filterNickname;
+    return params;
+  }, [filterPlatform, filterStatus, filterNickname, page]);
+
+  const { data: sessionsData, isLoading } = useSessions(queryParams);
+
+  // 多选
+  const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
+
+  // 筛选变化时重置页码
+  const handleFilterChange = (setter: (v: string) => void, value: string) => {
+    setter(value);
+    setPage(1);
+    setSelectedRowKeys([]);
+  };
 
   // Find running sessions
   const runningSessions = sessionsData?.items.filter(s => s.status === 'running') || [];
@@ -35,6 +81,25 @@ export default function CrawlerConsole() {
     });
   };
 
+  const handleBatchDelete = () => {
+    batchDeleteMut.mutate(selectedRowKeys, {
+      onSuccess: (res: any) => {
+        message.success(res.data.message);
+        setSelectedRowKeys([]);
+      },
+    });
+  };
+
+  // 前端过滤：后端 search 是按 nickname，如果没有支持 search 参数则前端过滤
+  const filteredItems = useMemo(() => {
+    let items = sessionsData?.items || [];
+    if (filterNickname) {
+      const kw = filterNickname.toLowerCase();
+      items = items.filter((s: Session) => s.creator_nickname?.toLowerCase().includes(kw));
+    }
+    return items;
+  }, [sessionsData?.items, filterNickname]);
+
   const sessionColumns = [
     { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
     { title: '创作者', dataIndex: 'creator_nickname', key: 'creator' },
@@ -46,7 +111,27 @@ export default function CrawlerConsole() {
     },
     { title: '内容数', dataIndex: 'total_contents', key: 'count' },
     { title: '时间', dataIndex: 'started_at', key: 'time', render: (t: string) => dayjs(t).format('MM-DD HH:mm:ss') },
+    {
+      title: '操作', key: 'action', width: 80,
+      render: (_: any, record: Session) => (
+        record.status === 'running' ? null : (
+          <Popconfirm title="确认删除?" onConfirm={() => deleteSessionMut.mutate(record.id, {
+            onSuccess: () => message.success('已删除'),
+          })}>
+            <Button size="small" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        )
+      ),
+    },
   ];
+
+  const rowSelection = {
+    selectedRowKeys,
+    onChange: (keys: React.Key[]) => setSelectedRowKeys(keys as number[]),
+    getCheckboxProps: (record: Session) => ({
+      disabled: record.status === 'running',
+    }),
+  };
 
   return (
     <div>
@@ -97,14 +182,70 @@ export default function CrawlerConsole() {
 
       <Row style={{ marginTop: 24 }}>
         <Col span={24}>
+          {/* 筛选区域 */}
+          <Space wrap style={{ marginBottom: 16 }}>
+            <Select
+              style={{ width: 120 }}
+              value={filterPlatform}
+              onChange={v => handleFilterChange(setFilterPlatform, v)}
+              options={PLATFORM_OPTIONS}
+            />
+            <Select
+              style={{ width: 120 }}
+              value={filterStatus}
+              onChange={v => handleFilterChange(setFilterStatus, v)}
+              options={STATUS_OPTIONS}
+            />
+            <Input
+              placeholder="搜索创作者"
+              prefix={<SearchOutlined />}
+              style={{ width: 160 }}
+              allowClear
+              value={filterNickname}
+              onChange={e => handleFilterChange(setFilterNickname, e.target.value)}
+            />
+            {selectedRowKeys.length > 0 && (
+              <Popconfirm
+                title={`确认删除选中的 ${selectedRowKeys.length} 条记录?`}
+                onConfirm={handleBatchDelete}
+              >
+                <Button danger icon={<DeleteOutlined />}>
+                  批量删除 {selectedRowKeys.length} 条
+                </Button>
+              </Popconfirm>
+            )}
+          </Space>
+
           <Table
-            title={() => '爬取历史'}
-            dataSource={sessionsData?.items || []}
+            title={() => (
+              <Space>
+                <span>爬取历史</span>
+                {sessionsData && <Tag>共 {sessionsData.total} 条</Tag>}
+                <Popconfirm
+                  title="确认清除所有爬取数据?"
+                  description="将删除所有非运行中的爬取记录和内容数据，此操作不可恢复"
+                  onConfirm={() => clearAllMut.mutate(undefined, {
+                    onSuccess: (res: any) => message.success(res.data.message),
+                  })}
+                >
+                  <Button size="small" danger icon={<ClearOutlined />}>清除所有数据</Button>
+                </Popconfirm>
+              </Space>
+            )}
+            dataSource={filteredItems}
             columns={sessionColumns}
             rowKey="id"
+            rowSelection={rowSelection}
             loading={isLoading}
             size="small"
-            pagination={{ pageSize: 20 }}
+            pagination={{
+              current: page,
+              pageSize,
+              total: sessionsData?.total || 0,
+              onChange: (p: number) => { setPage(p); setSelectedRowKeys([]); },
+              showTotal: (total: number) => `第 ${page} / ${Math.ceil(total / pageSize)} 页`,
+              showSizeChanger: false,
+            }}
           />
         </Col>
       </Row>

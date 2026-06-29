@@ -19,9 +19,24 @@ export default function ScheduleManager() {
   const [editInterval, setEditInterval] = useState(360);
   const [editEnabled, setEditEnabled] = useState(true);
   const [editKeyword, setEditKeyword] = useState('');
+  const [editMaxItems, setEditMaxItems] = useState(50);
   const [addCreatorId, setAddCreatorId] = useState<number | null>(null);
   const [addInterval, setAddInterval] = useState(360);
   const [addKeyword, setAddKeyword] = useState('');
+  const [addMaxItems, setAddMaxItems] = useState(50);
+
+  // 选择创作者时，自动预填搜索类任务的关键词
+  const handleCreatorChange = (id: number | null) => {
+    setAddCreatorId(id);
+    if (id) {
+      const c = getCreator(id);
+      if (isSearchCreator(c)) {
+        setAddKeyword(c?.extra_data?.keyword || '');
+      } else {
+        setAddKeyword('');
+      }
+    }
+  };
 
   const { data: schedules, isLoading } = useQuery<Schedule[]>({
     queryKey: ['schedules'],
@@ -51,6 +66,7 @@ export default function ScheduleManager() {
     setEditInterval(schedule.interval_minutes);
     setEditEnabled(schedule.enabled);
     setEditKeyword(schedule.extra_config?.keyword || '');
+    setEditMaxItems(schedule.extra_config?.max_items || 50);
     setEditOpen(true);
   };
 
@@ -63,7 +79,7 @@ export default function ScheduleManager() {
 
   const handleSave = () => {
     if (!editingSchedule) return;
-    const data: any = { interval_minutes: editInterval, enabled: editEnabled };
+    const data: any = { interval_minutes: editInterval, enabled: editEnabled, max_items: editMaxItems };
     const c = getCreator(editingSchedule.creator_id);
     if (isSearchCreator(c)) data.keyword = editKeyword;
     upsertMut.mutate({ creatorId: editingSchedule.creator_id, data });
@@ -71,7 +87,7 @@ export default function ScheduleManager() {
 
   const handleAdd = () => {
     if (!addCreatorId) { message.warning('请选择创作者'); return; }
-    const data: any = { interval_minutes: addInterval, enabled: true };
+    const data: any = { interval_minutes: addInterval, enabled: true, max_items: addMaxItems };
     const c = getCreator(addCreatorId);
     if (isSearchCreator(c)) data.keyword = addKeyword;
     upsertMut.mutate({ creatorId: addCreatorId, data });
@@ -127,7 +143,7 @@ export default function ScheduleManager() {
       </div>
 
       <Button type="primary" icon={<PlusOutlined />}
-        onClick={() => { setAddOpen(true); setAddCreatorId(null); setAddInterval(360); }}
+        onClick={() => { setAddOpen(true); setAddCreatorId(null); setAddInterval(360); setAddKeyword(''); setAddMaxItems(50); }}
         disabled={unscheduledCreators.length === 0}
         style={{ marginBottom: 16 }}>
         添加定时任务
@@ -142,7 +158,7 @@ export default function ScheduleManager() {
         onCancel={() => setAddOpen(false)} confirmLoading={upsertMut.isPending}>
         <div style={{ marginBottom: 16 }}>
           <div style={{ marginBottom: 8 }}>选择创作者</div>
-          <Select showSearch placeholder="搜索创作者" value={addCreatorId} onChange={setAddCreatorId}
+          <Select showSearch placeholder="搜索创作者" value={addCreatorId} onChange={handleCreatorChange}
             style={{ width: '100%' }}
             filterOption={(input, option) => (option?.label as string || '').includes(input)}
             options={unscheduledCreators.map((c: any) => ({
@@ -154,6 +170,11 @@ export default function ScheduleManager() {
           <div style={{ marginBottom: 8 }}>执行间隔（分钟）</div>
           <InputNumber min={5} max={10080} value={addInterval} onChange={v => setAddInterval(v || 360)}
             addonAfter="分钟" style={{ width: '100%' }} />
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 8 }}>爬取数量</div>
+          <InputNumber min={1} max={200} value={addMaxItems} onChange={v => setAddMaxItems(v || 50)}
+            addonAfter="条" style={{ width: '100%' }} />
         </div>
         {addCreatorId && isSearchCreator(getCreator(addCreatorId)) && (
           <div style={{ marginBottom: 16 }}>
@@ -170,6 +191,11 @@ export default function ScheduleManager() {
           <div style={{ marginBottom: 8 }}>执行间隔（分钟）</div>
           <InputNumber min={5} max={10080} value={editInterval} onChange={v => setEditInterval(v || 360)}
             addonAfter="分钟" style={{ width: '100%' }} />
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 8 }}>爬取数量</div>
+          <InputNumber min={1} max={200} value={editMaxItems} onChange={v => setEditMaxItems(v || 50)}
+            addonAfter="条" style={{ width: '100%' }} />
         </div>
         {editingSchedule && isSearchCreator(getCreator(editingSchedule.creator_id)) && (
           <div style={{ marginBottom: 16 }}>

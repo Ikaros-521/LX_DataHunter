@@ -2,12 +2,12 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc, func, delete
 from backend.database import get_db
 
 logger = logging.getLogger("fapai.sessions")
-from backend.models import CrawlSession, MonitoredCreator
-from backend.schemas import SessionResponse, SessionListResponse
+from backend.models import CrawlSession, MonitoredCreator, ContentSnapshot
+from backend.schemas import SessionResponse, SessionListResponse, BatchDeleteRequest
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 
@@ -134,3 +134,75 @@ async def get_session_contents(
         for r in rows
     ]
     return {"total": total, "items": [i.model_dump() for i in items]}
+
+
+@router.delete("/cleanup/all")
+async def clear_all_sessions(db: AsyncSession = Depends(get_db)):
+    """全局清除所有爬取数据（session + content），保留创作者和定时任务。"""
+    stmt = select(CrawlSession).where(CrawlSession.status != "running")
+    rows = (await db.execute(stmt)).scalars().all()
+    count = len(rows)
+    for s in rows:
+        await db.delete(s)
+    if count > 0:
+        await db.commit()
+        logger.info(f"Cleared all {count} sessions globally")
+    return {"message": f"Cleared {count} sessions total"}
+
+
+@router.delete("/batch")
+async def batch_delete_sessions(
+    body: BatchDeleteRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量删除指定的爬取session，跳过running状态的session。"""
+    session_ids = body.session_ids
+    deleted = 0
+    skipped = 0
+    for sid in session_ids:
+        session = await db.get(CrawlSession, sid)
+        if not session:
+            continue
+        if session.status == "running":
+            skipped += 1
+            continue
+        await db.delete(session)
+        deleted += 1
+    if deleted > 0:
+        await db.commit()
+        logger.info(f"Batch deleted {deleted} sessions, skipped {skipped} running")
+    return {"message": f"Deleted {deleted} sessions, skipped {skipped} running"}
+
+
+@router.delete("/creator/{creator_id}")
+async def clear_creator_sessions(creator_id: int, db: AsyncSession = Depends(get_db)):
+    """清除某创作者的所有爬取数据（session + content），保留创作者和定时任务。"""
+    creator = await db.get(MonitoredCreator, creator_id)
+    if not creator:
+        raise HTTPException(404, f"Creator not found: id={creator_id}")
+    stmt = select(CrawlSession).where(
+        CrawlSession.creator_id == creator_id,
+        CrawlSession.status != "running",
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    count = len(rows)
+    for s in rows:
+        await db.delete(s)
+    if count > 0:
+        await db.commit()
+        logger.info(f"Cleared {count} sessions for creator_id={creator_id}")
+    return {"message": f"Cleared {count} sessions for creator {creator_id}"}
+
+
+@router.delete("/{session_id}")
+async def delete_session(session_id: int, db: AsyncSession = Depends(get_db)):
+    """删除单个爬取session及其级联的content数据。不允许删除running状态的session。"""
+    session = await db.get(CrawlSession, session_id)
+    if not session:
+        raise HTTPException(404, f"Session not found: id={session_id}")
+    if session.status == "running":
+        raise HTTPException(400, "Cannot delete a running session")
+    logger.info(f"Deleting session: id={session.id}, creator_id={session.creator_id}")
+    await db.delete(session)
+    await db.commit()
+    return {"message": f"Deleted session id={session_id}"}

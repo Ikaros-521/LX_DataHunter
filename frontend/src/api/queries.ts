@@ -37,7 +37,7 @@ export interface Content {
 export interface Schedule {
   id: number; creator_id: number; interval_minutes: number;
   enabled: boolean; last_run_at: string | null; next_run_at: string | null;
-  extra_config?: { keyword?: string } | null;
+  extra_config?: { keyword?: string; max_items?: number } | null;
 }
 
 export interface PaginatedResponse<T> {
@@ -120,5 +120,49 @@ export function useUpsertSchedule() {
     mutationFn: ({ creatorId, data }: { creatorId: number; data: { interval_minutes: number; enabled: boolean } }) =>
       client.put(`/schedules/${creatorId}`, data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['schedules'] }),
+  });
+}
+
+export function useDeleteSession() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (sessionId: number) => client.delete(`/sessions/${sessionId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sessions'] });
+      qc.invalidateQueries({ queryKey: ['creators'] });
+    },
+  });
+}
+
+export function useBatchDeleteSessions() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (sessionIds: number[]) => client.delete('/sessions/batch', { data: { session_ids: sessionIds } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sessions'] });
+      qc.invalidateQueries({ queryKey: ['creators'] });
+    },
+  });
+}
+
+export function useClearCreatorSessions() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (creatorId: number) => client.delete(`/sessions/creator/${creatorId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sessions'] });
+      qc.invalidateQueries({ queryKey: ['creators'] });
+    },
+  });
+}
+
+export function useClearAllSessions() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => client.delete('/sessions/cleanup/all'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sessions'] });
+      qc.invalidateQueries({ queryKey: ['creators'] });
+    },
   });
 }

@@ -36,7 +36,7 @@ async def upsert_schedule(
         select(ScheduleConfig).where(ScheduleConfig.creator_id == creator_id)
     )).scalar_one_or_none()
 
-    extra_config = {}
+    extra_config = {"max_items": body.max_items}
     if body.keyword:
         extra_config["keyword"] = body.keyword
 

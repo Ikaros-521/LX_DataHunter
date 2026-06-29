@@ -1,9 +1,9 @@
-import { Row, Col, Table, Tag, List } from 'antd';
-import { UserOutlined, VideoCameraOutlined, ThunderboltOutlined, ClockCircleOutlined } from '@ant-design/icons';
+import { Row, Col, Table, Tag, List, Button, Popconfirm, message } from 'antd';
+import { UserOutlined, VideoCameraOutlined, ThunderboltOutlined, ClockCircleOutlined, ClearOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import StatCard from '../components/StatCard';
 import PlatformTag from '../components/PlatformTag';
-import { useCreators, useSessions, useSchedules } from '../api/queries';
+import { useCreators, useSessions, useSchedules, useClearAllSessions } from '../api/queries';
 import dayjs from 'dayjs';
 
 export default function Dashboard() {
@@ -11,6 +11,7 @@ export default function Dashboard() {
   const { data: creatorsData, isLoading: creatorsLoading } = useCreators();
   const { data: sessionsData, isLoading: sessionsLoading } = useSessions({ page_size: 10 });
   const { data: schedules } = useSchedules();
+  const clearAllMut = useClearAllSessions();
 
   const totalCreators = creatorsData?.total || 0;
   const totalSessions = sessionsData?.total || 0;
@@ -40,6 +41,18 @@ export default function Dashboard() {
 
   return (
     <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <h2 style={{ margin: 0 }}>概览</h2>
+        <Popconfirm
+          title="确认清除所有爬取数据?"
+          description="将删除所有非运行中的爬取记录和内容数据，此操作不可恢复"
+          onConfirm={() => clearAllMut.mutate(undefined, {
+            onSuccess: (res: any) => message.success(res.data.message),
+          })}
+        >
+          <Button size="small" danger icon={<ClearOutlined />}>清除爬取数据</Button>
+        </Popconfirm>
+      </div>
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} md={6}>
           <StatCard title="监控创作者" value={totalCreators} icon={<UserOutlined />} color="#1677ff" loading={creatorsLoading} />
