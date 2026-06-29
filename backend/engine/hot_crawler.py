@@ -541,13 +541,74 @@ async def _crawl_douyin_hot(category: str, max_items: int, cookie_str: str | Non
                 await _handle_captcha(page, headless)
                 await _wait_for_real_cards(page)
 
-                filter_btn = page.locator('text=筛选').first
-                if await _click_and_guard(filter_btn, "筛选"):
-                    if await _click_and_guard(page.locator('text=最多点赞').first, "最多点赞"):
+                # 按 data-index1(行)/data-index2(列) 精确选择筛选项，
+                # 抖音筛选面板用此属性标识每个选项，比 text= 更精确、不受页面其他
+                # 文字干扰。text= 作为兜底。
+                async def _filter_opt(idx1: int, idx2: int, label: str):
+                    sel = f'[data-index1="{idx1}"][data-index2="{idx2}"]'
+                    loc = page.locator(sel).first
+                    if await loc.count() == 0:
+                        logger.info(f"筛选项 '{label}' 无 data-index 属性，回退到 text= 选择器")
+                        loc = page.locator(f'text={label}').first
+                    return loc
+
+                # 等待筛选面板展开（data-index 或筛选项文字出现）
+                async def _wait_for_filter_panel(timeout_loops: int = 10):
+                    for _ in range(timeout_loops):
+                        try:
+                            if await page.locator('[data-index1="0"]').count() > 0:
+                                return True
+                            # 兜底：检查常见筛选项文字是否可见
+                            if await page.locator('text=综合排序').count() > 0:
+                                return True
+                        except Exception:
+                            pass
+                        await asyncio.sleep(0.5)
+                    logger.warning("筛选面板元素等待超时")
+                    return False
+
+                # 切换筛选面板到展开状态。
+                # 注意：页面加载时面板可能已展开，"筛选"按钮是 toggle——
+                # 点一次可能关闭而非打开，所以需要检测面板状态并重试。
+                async def _ensure_filter_open() -> bool:
+                    # 先看面板是否已经展开
+                    if await _wait_for_filter_panel():
+                        logger.info("筛选面板已展开，无需点击")
+                        return True
+                    # 面板未展开，点击"筛选"打开
+                    filter_btn = page.locator('text=筛选').first
+                    if await filter_btn.count() == 0:
+                        logger.warning("未找到「筛选」按钮")
+                        return False
+                    try:
+                        await filter_btn.click(timeout=5000)
+                        await asyncio.sleep(1)
+                    except Exception as e:
+                        logger.warning(f"点击「筛选」失败: {e}")
+                        return False
+                    if await _wait_for_filter_panel():
+                        logger.info("点击筛选后面板已展开")
+                        return True
+                    # 可能面板原本是展开的，点击后关掉了——再点一次
+                    logger.info("点击筛选后面板未展开（可能原本是开着的），再点一次")
+                    try:
+                        await filter_btn.click(timeout=5000)
+                        await asyncio.sleep(1)
+                    except Exception as e:
+                        logger.warning(f"第二次点击「筛选」失败: {e}")
+                        return False
+                    return await _wait_for_filter_panel()
+
+                if await _ensure_filter_open():
+                    # 排序依据行(data-index1=0): 综合排序(0), 最新发布(1), 最多点赞(2)
+                    opt = await _filter_opt(0, 2, "最多点赞")
+                    if await _click_and_guard(opt, "最多点赞"):
                         pass
-                    # 再点筛选 → 选 "一周内"
-                    if await _click_and_guard(page.locator('text=筛选').first, "筛选(2)"):
-                        await _click_and_guard(page.locator('text=一周内').first, "一周内")
+                    # 再展开筛选面板 → 选 "一周内"
+                    if await _ensure_filter_open():
+                        # 发布时间行(data-index1=1): 不限(0), 一天内(1), 一周内(2), 半年内(3)
+                        opt = await _filter_opt(1, 2, "一周内")
+                        await _click_and_guard(opt, "一周内")
             except Exception as e:
                 logger.warning(f"Filter interaction failed: {e}")
 
