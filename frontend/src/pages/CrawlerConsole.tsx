@@ -35,6 +35,7 @@ export default function CrawlerConsole() {
   const [filterPlatform, setFilterPlatform] = useState<string>('');
   const [filterStatus, setFilterStatus] = useState<string>('');
   const [filterNickname, setFilterNickname] = useState<string>('');
+  const [filterKeyword, setFilterKeyword] = useState<string>('');
   const [page, setPage] = useState(1);
   const pageSize = 50;
 
@@ -44,8 +45,9 @@ export default function CrawlerConsole() {
     if (filterPlatform) params.platform = filterPlatform;
     if (filterStatus) params.status = filterStatus;
     if (filterNickname) params.search = filterNickname;
+    if (filterKeyword) params.keyword = filterKeyword;
     return params;
-  }, [filterPlatform, filterStatus, filterNickname, page]);
+  }, [filterPlatform, filterStatus, filterNickname, filterKeyword, page]);
 
   const { data: sessionsData, isLoading } = useSessions(queryParams);
 
@@ -203,6 +205,14 @@ export default function CrawlerConsole() {
               allowClear
               value={filterNickname}
               onChange={e => handleFilterChange(setFilterNickname, e.target.value)}
+            />
+            <Input
+              placeholder="搜索关键词"
+              prefix={<SearchOutlined />}
+              style={{ width: 160 }}
+              allowClear
+              value={filterKeyword}
+              onChange={e => handleFilterChange(setFilterKeyword, e.target.value)}
             />
             {selectedRowKeys.length > 0 && (
               <Popconfirm

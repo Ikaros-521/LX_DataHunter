@@ -237,6 +237,7 @@ async def _crawl_hot_virtual(
             platform=creator.platform,
             trigger_type=trigger_type.value,
             status=SessionStatus.RUNNING.value,
+            keyword=keyword or "",
         )
         db.add(session)
         await db.commit()

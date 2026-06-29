@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
-import { Descriptions, Space, Button, Drawer, Tag, Row, Col, message, Popconfirm } from 'antd';
+import { Descriptions, Space, Button, Drawer, Tag, Row, Col, message, Popconfirm, Select } from 'antd';
 import { ThunderboltOutlined, ClearOutlined } from '@ant-design/icons';
 import PlatformTag from '../components/PlatformTag';
 import TrendChart from '../components/TrendChart';
@@ -8,6 +8,11 @@ import ContentTable from '../components/ContentTable';
 import { useCreator, useSessions, useSessionContents, useTriggerCrawl, useClearCreatorSessions } from '../api/queries';
 import dayjs from 'dayjs';
 import type { Content } from '../api/queries';
+
+/** 判断创作者是否为搜索类虚拟创作者 */
+function isSearchCreator(platformUid?: string): boolean {
+  return !!platformUid?.startsWith('__hot__') && !!platformUid?.includes('_search');
+}
 
 export default function CreatorDetail() {
   const { id } = useParams<{ id: string }>();
@@ -26,9 +31,28 @@ export default function CreatorDetail() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedContent, setSelectedContent] = useState<Content | null>(null);
 
-  const sessions = sessionsData?.items || [];
+  // 关键词筛选状态
+  const [filterKeyword, setFilterKeyword] = useState<string>('');
 
-  // Build trend data from all completed sessions
+  const allSessions = sessionsData?.items || [];
+
+  const isSearch = isSearchCreator(creator?.platform_uid);
+
+  // 提取所有不重复的关键词
+  const keywords = useMemo(() => {
+    if (!isSearch) return [];
+    const set = new Set<string>();
+    allSessions.forEach(s => { if (s.keyword) set.add(s.keyword); });
+    return Array.from(set).sort();
+  }, [allSessions, isSearch]);
+
+  // 按关键词筛选后的 sessions
+  const sessions = useMemo(() => {
+    if (!isSearch || !filterKeyword) return allSessions;
+    return allSessions.filter(s => s.keyword === filterKeyword);
+  }, [allSessions, isSearch, filterKeyword]);
+
+  // Build trend data from filtered completed sessions
   const trendData = sessions
     .filter(s => s.status === 'completed')
     .reverse()
@@ -77,6 +101,16 @@ export default function CreatorDetail() {
       <div style={{ marginTop: 24 }}>
         <Space style={{ marginBottom: 16 }}>
           <h3 style={{ margin: 0 }}>爬取历史</h3>
+          {isSearch && keywords.length > 0 && (
+            <Select
+              allowClear
+              placeholder="筛选关键词"
+              style={{ width: 160 }}
+              value={filterKeyword || undefined}
+              onChange={(v) => { setFilterKeyword(v || ''); setSelectedSessionId(null); }}
+              options={keywords.map(k => ({ label: k, value: k }))}
+            />
+          )}
           {sessions.length > 0 && (
             <Popconfirm
               title="确认清除该创作者的所有爬取数据?"

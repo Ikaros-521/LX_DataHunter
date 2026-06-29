@@ -49,6 +49,7 @@ class SessionResponse(BaseModel):
     engagement_total: dict = {}
     delta_from_prev: dict = {}
     creator_nickname: str = ""
+    keyword: str = ""
 
     model_config = {"from_attributes": True}
 

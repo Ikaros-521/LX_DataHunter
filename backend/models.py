@@ -78,6 +78,7 @@ class CrawlSession(Base):
     total_contents = Column(Integer, default=0)
     engagement_total = Column(JSON, default=dict)
     delta_from_prev = Column(JSON, default=dict)
+    keyword = Column(String(255), default="", index=True)  # 搜索类任务的关键词
 
     creator = relationship("MonitoredCreator", back_populates="sessions")
     contents = relationship("ContentSnapshot", back_populates="session", cascade="all, delete-orphan")

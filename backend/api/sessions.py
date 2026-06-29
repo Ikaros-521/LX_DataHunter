@@ -16,6 +16,7 @@ async def list_sessions(
     creator_id: int | None = None,
     platform: str | None = None,
     status: str | None = None,
+    keyword: str | None = None,
     page: int = 1,
     page_size: int = 20,
     db: AsyncSession = Depends(get_db),
@@ -32,6 +33,9 @@ async def list_sessions(
     if status:
         stmt = stmt.where(CrawlSession.status == status)
         count_stmt = count_stmt.where(CrawlSession.status == status)
+    if keyword:
+        stmt = stmt.where(CrawlSession.keyword == keyword)
+        count_stmt = count_stmt.where(CrawlSession.keyword == keyword)
 
     total = (await db.execute(count_stmt)).scalar() or 0
     stmt = stmt.order_by(desc(CrawlSession.started_at)).offset((page - 1) * page_size).limit(page_size)
@@ -53,6 +57,7 @@ async def list_sessions(
             engagement_total=s.engagement_total,
             delta_from_prev=s.delta_from_prev,
             creator_nickname=creator.nickname if creator else "",
+            keyword=s.keyword or "",
         ))
     return {"total": total, "items": items}
 
@@ -75,6 +80,7 @@ async def get_session(session_id: int, db: AsyncSession = Depends(get_db)):
         engagement_total=s.engagement_total,
         delta_from_prev=s.delta_from_prev,
         creator_nickname=creator.nickname if creator else "",
+        keyword=s.keyword or "",
     )
 
 @router.get("/{session_id}/contents", response_model=dict)

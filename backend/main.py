@@ -63,6 +63,20 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass  # 列已存在
 
+        # ---- 轻量迁移：为 crawl_sessions 补加 keyword 列 ----
+        try:
+            await conn.execute(
+                sa_text("ALTER TABLE crawl_sessions ADD COLUMN keyword VARCHAR(255) DEFAULT ''")
+            )
+        except Exception:
+            pass  # 列已存在
+        try:
+            await conn.execute(
+                sa_text("CREATE INDEX ix_crawl_sessions_keyword ON crawl_sessions (keyword)")
+            )
+        except Exception:
+            pass  # 索引已存在
+
         # ---- 恢复机制：将上次中断的 running 任务标记为 interrupted ----
         result = await conn.execute(
             select(CrawlSession.id).where(

@@ -81,6 +81,7 @@ async def trigger_hot_crawl(
         platform=body.platform,
         trigger_type=TriggerType.MANUAL.value,
         status=SessionStatus.RUNNING.value,
+        keyword=body.keyword or "",
     )
     db.add(session)
     await db.commit()

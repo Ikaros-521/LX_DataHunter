@@ -22,6 +22,7 @@ export interface Session {
   total_contents: number; engagement_total: Record<string, number>;
   delta_from_prev: Record<string, number>;
   creator_nickname: string;
+  keyword: string;
 }
 
 export interface Content {
