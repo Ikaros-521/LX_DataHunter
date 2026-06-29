@@ -18,9 +18,22 @@ export default function CreatorDetail() {
   const { id } = useParams<{ id: string }>();
   const creatorId = parseInt(id!);
   const { data: creator, isLoading } = useCreator(creatorId);
-  const { data: sessionsData } = useSessions({ creator_id: creatorId, page_size: 100 });
   const crawlMutation = useTriggerCrawl();
   const clearSessionsMut = useClearCreatorSessions();
+
+  // 关键词筛选状态
+  const [filterKeyword, setFilterKeyword] = useState<string>('');
+  const isSearch = isSearchCreator(creator?.platform_uid);
+
+  // 全量请求：仅用于提取关键词下拉选项
+  const { data: allSessionsData } = useSessions({ creator_id: creatorId, page_size: 100 });
+  // 按关键词筛选的请求：显示给用户的数据
+  const keywordParams = useMemo(() => {
+    const params: Record<string, any> = { creator_id: creatorId, page_size: 100 };
+    if (isSearch && filterKeyword) params.keyword = filterKeyword;
+    return params;
+  }, [creatorId, isSearch, filterKeyword]);
+  const { data: filteredSessionsData } = useSessions(keywordParams);
 
   const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null);
   const [contentPage, setContentPage] = useState(1);
@@ -31,26 +44,18 @@ export default function CreatorDetail() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedContent, setSelectedContent] = useState<Content | null>(null);
 
-  // 关键词筛选状态
-  const [filterKeyword, setFilterKeyword] = useState<string>('');
+  // 从全量数据提取所有不重复的关键词
+  const allSessionsList = allSessionsData?.items || [];
 
-  const allSessions = sessionsData?.items || [];
-
-  const isSearch = isSearchCreator(creator?.platform_uid);
-
-  // 提取所有不重复的关键词
   const keywords = useMemo(() => {
     if (!isSearch) return [];
     const set = new Set<string>();
-    allSessions.forEach(s => { if (s.keyword) set.add(s.keyword); });
+    allSessionsList.forEach(s => { if (s.keyword) set.add(s.keyword); });
     return Array.from(set).sort();
-  }, [allSessions, isSearch]);
+  }, [allSessionsList, isSearch]);
 
-  // 按关键词筛选后的 sessions
-  const sessions = useMemo(() => {
-    if (!isSearch || !filterKeyword) return allSessions;
-    return allSessions.filter(s => s.keyword === filterKeyword);
-  }, [allSessions, isSearch, filterKeyword]);
+  // 筛选后的 sessions 用于展示
+  const sessions = filteredSessionsData?.items || [];
 
   // Build trend data from filtered completed sessions
   const trendData = sessions

@@ -77,6 +77,32 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass  # 索引已存在
 
+        # ---- 轻量迁移：回填历史 session 的 keyword（从 content_snapshots.extra_data 逆推） ----
+        try:
+            await conn.execute(
+                sa_text("""
+                    UPDATE crawl_sessions SET keyword = (
+                        SELECT COALESCE(json_extract(cs.extra_data, '$.keyword'), '')
+                        FROM content_snapshots cs
+                        WHERE cs.session_id = crawl_sessions.id
+                        AND cs.extra_data IS NOT NULL
+                        AND json_extract(cs.extra_data, '$.keyword') IS NOT NULL
+                        AND json_extract(cs.extra_data, '$.keyword') != ''
+                        LIMIT 1
+                    )
+                    WHERE crawl_sessions.keyword = ''
+                      AND crawl_sessions.id IN (
+                          SELECT DISTINCT cs2.session_id
+                          FROM content_snapshots cs2
+                          WHERE json_extract(cs2.extra_data, '$.keyword') IS NOT NULL
+                            AND json_extract(cs2.extra_data, '$.keyword') != ''
+                      )
+                """)
+            )
+            logger.info("Backfilled keyword for historical sessions from content_snapshots")
+        except Exception as e:
+            logger.warning(f"Failed to backfill session keywords: {e}")
+
         # ---- 恢复机制：将上次中断的 running 任务标记为 interrupted ----
         result = await conn.execute(
             select(CrawlSession.id).where(
