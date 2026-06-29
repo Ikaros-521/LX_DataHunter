@@ -1,6 +1,8 @@
 """热门内容爬取 — 抓取平台排行榜/热门内容"""
 import asyncio
 import logging
+import sys
+import threading
 from datetime import datetime
 
 from bilibili_api import rank, hot, sync, Credential
@@ -10,6 +12,33 @@ from backend.models import Platform, ContentType
 from backend.engine.platforms.base import ContentItem
 
 logger = logging.getLogger("fapai.hot_crawler")
+
+
+def _run_coro_in_thread(coro):
+    """在独立线程的新 event loop 中运行协程。
+
+    Windows 上 uvicorn --reload 会强制使用 SelectorEventLoopPolicy，
+    该 loop 不支持 subprocess，导致 Playwright 无法启动浏览器。
+    此函数在单独线程中用 asyncio.run() 执行协程（Windows 默认
+    ProactorEventLoop），与 uvicorn 的 loop 解耦。
+    """
+    result = None
+    error = None
+
+    def _runner():
+        nonlocal result, error
+        try:
+            result = asyncio.run(coro)
+        except Exception as e:
+            error = e
+
+    thread = threading.Thread(target=_runner, name="playwright-crawler")
+    thread.start()
+    thread.join()
+
+    if error:
+        raise error
+    return result
 
 # 各平台预定义分类
 HOT_CATEGORIES = {
@@ -160,7 +189,16 @@ async def crawl_hot(
     if platform == "bilibili":
         items = await _crawl_bilibili_hot(category, max_items, credential_str)
     elif platform == "douyin":
-        items = await _crawl_douyin_hot(category, max_items, credential_str, keyword)
+        # Windows 上 uvicorn 可能使用 SelectorEventLoop（不支持 subprocess），
+        # 导致 Playwright 无法启动浏览器。此时在独立线程的 ProactorEventLoop
+        # 中执行整个抖音爬取流程，与 uvicorn 的 loop 解耦。
+        coro = _crawl_douyin_hot(category, max_items, credential_str, keyword)
+        if sys.platform == "win32":
+            items = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: _run_coro_in_thread(coro)
+            )
+        else:
+            items = await coro
 
     if max_items > 0 and len(items) > max_items:
         items = items[:max_items]

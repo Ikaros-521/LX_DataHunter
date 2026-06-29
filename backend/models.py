@@ -116,6 +116,7 @@ class ScheduleConfig(Base):
     enabled = Column(Boolean, default=True)
     last_run_at = Column(DateTime, nullable=True)
     next_run_at = Column(DateTime, nullable=True)
+    extra_config = Column(JSON, default=dict)  # 扩展配置：keyword 等
 
     creator = relationship("MonitoredCreator", back_populates="schedule")
 

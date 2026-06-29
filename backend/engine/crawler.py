@@ -22,6 +22,7 @@ async def crawl_creator(
     existing_session_id: Optional[int] = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    keyword: str | None = None,
 ) -> CrawlSession:
     """Execute a crawl for a creator.
 
@@ -47,6 +48,7 @@ async def crawl_creator(
             headless=headless,
             progress_callback=progress_callback,
             existing_session_id=existing_session_id,
+            keyword=keyword,
         )
 
     # 1. Create or reuse session
@@ -203,6 +205,7 @@ async def _crawl_hot_virtual(
     headless: bool = True,
     progress_callback: Any = None,
     existing_session_id: Optional[int] = None,
+    keyword: str | None = None,
 ) -> CrawlSession:
     """处理 __hot__{platform}_{category} 虚拟创作者 —— 转交给 crawl_hot。
 
@@ -240,22 +243,23 @@ async def _crawl_hot_virtual(
         await db.refresh(session)
         logger.info(f"Session created (hot virtual): id={session.id}")
 
+    # search 类需要关键词：优先用传入的 keyword，其次从 creator.extra_data 读取
+    if category == "search":
+        if not keyword:
+            keyword = (creator.extra_data or {}).get("keyword", "")
+        if not keyword:
+            msg = "搜索类任务需要关键词，不能直接触发。请在「热门内容」页输入关键词后再抓取。"
+            logger.warning(f"Search virtual creator {creator.platform_uid} triggered without keyword.")
+            session.status = SessionStatus.FAILED.value
+            session.error_message = msg
+            session.finished_at = beijing_now()
+            await db.commit()
+            raise ValueError(msg)
+
     logger.info(
         f"Hot virtual crawl: platform={creator.platform}, category={category}, "
-        f"session={session.id}, max={max_items}"
+        f"session={session.id}, max={max_items}, keyword={keyword or '(none)'}"
     )
-
-    # search 类需要关键词；虚拟创作者的 uid 不携带关键词，
-    # 通过「创作者管理→爬取」或定时调度触发搜索类虚拟创作者没有意义，
-    # 这里标记 session 为 FAILED 并报错，避免空转抓到无关的热点内容。
-    if category == "search":
-        msg = "搜索类任务需要关键词，不能直接触发。请在「热门内容」页输入关键词后再抓取。"
-        logger.warning(f"Search virtual creator {creator.platform_uid} triggered without keyword.")
-        session.status = SessionStatus.FAILED.value
-        session.error_message = msg
-        session.finished_at = beijing_now()
-        await db.commit()
-        raise ValueError(msg)
 
     # 2. 获取凭证
     cookie_str = None
@@ -272,6 +276,7 @@ async def _crawl_hot_virtual(
             max_items=max_items,
             credential_str=cookie_str,
             progress_callback=progress_callback,
+            keyword=keyword or "",
         )
         logger.info(f"crawl_hot returned: {len(items)} items, label='{creator_label}'")
     except Exception as e:

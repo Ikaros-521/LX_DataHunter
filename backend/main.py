@@ -49,11 +49,19 @@ logger = logging.getLogger("fapai")
 async def lifespan(app: FastAPI):
     from .engine.scheduler import start_scheduler, stop_scheduler
     from .models import CrawlSession, SessionStatus
-    from sqlalchemy import select, update as sa_update
+    from sqlalchemy import select, text as sa_text, update as sa_update
 
     logger.info("Starting FaPai Spider...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+        # ---- 轻量迁移：为已有数据库补加 extra_config 列 ----
+        try:
+            await conn.execute(
+                sa_text("ALTER TABLE schedule_configs ADD COLUMN extra_config JSON DEFAULT '{}'")
+            )
+        except Exception:
+            pass  # 列已存在
 
         # ---- 恢复机制：将上次中断的 running 任务标记为 interrupted ----
         result = await conn.execute(

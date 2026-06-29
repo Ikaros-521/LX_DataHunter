@@ -56,6 +56,7 @@ async def _to_response(creator: MonitoredCreator, db: AsyncSession) -> dict:
             "enabled": creator.schedule.enabled,
             "last_run_at": creator.schedule.last_run_at,
             "next_run_at": creator.schedule.next_run_at,
+            "extra_config": creator.schedule.extra_config,
         }
     return data
 

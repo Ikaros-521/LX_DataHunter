@@ -38,10 +38,12 @@ async def run_scheduled_check():
                 continue
 
             try:
+                keyword = (schedule.extra_config or {}).get("keyword") if schedule.extra_config else None
                 await crawl_creator(
                     creator=creator,
                     db=db,
                     trigger_type=TriggerType.SCHEDULED,
+                    keyword=keyword,
                 )
             except Exception:
                 pass

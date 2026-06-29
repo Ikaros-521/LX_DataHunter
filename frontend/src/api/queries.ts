@@ -37,6 +37,7 @@ export interface Content {
 export interface Schedule {
   id: number; creator_id: number; interval_minutes: number;
   enabled: boolean; last_run_at: string | null; next_run_at: string | null;
+  extra_config?: { keyword?: string } | null;
 }
 
 export interface PaginatedResponse<T> {

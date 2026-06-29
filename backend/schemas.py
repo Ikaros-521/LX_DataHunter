@@ -88,6 +88,7 @@ class ContentListResponse(BaseModel):
 class ScheduleUpsert(BaseModel):
     interval_minutes: int = Field(..., ge=5, le=10080)  # 5min ~ 1 week
     enabled: bool = True
+    keyword: str | None = None  # 搜索类任务的关键词
 
 class ScheduleResponse(BaseModel):
     id: int
@@ -96,6 +97,7 @@ class ScheduleResponse(BaseModel):
     enabled: bool
     last_run_at: Optional[datetime] = None
     next_run_at: Optional[datetime] = None
+    extra_config: Optional[dict] = None
 
     model_config = {"from_attributes": True}
 

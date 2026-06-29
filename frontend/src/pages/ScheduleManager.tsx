@@ -1,11 +1,15 @@
 import { useState, useMemo } from 'react';
-import { Table, Button, Modal, Select, Switch, Space, Popconfirm, message } from 'antd';
+import { Table, Button, Modal, Select, Switch, Space, Popconfirm, message, Input } from 'antd';
 import { ClockCircleOutlined, EditOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client from '../api/client';
 import PlatformTag from '../components/PlatformTag';
 import dayjs from 'dayjs';
 import type { Schedule } from '../api/queries';
+
+function isSearchCreator(c: any): boolean {
+  return c?.platform_uid?.startsWith('__hot__') && c?.platform_uid?.includes('_search');
+}
 
 export default function ScheduleManager() {
   const qc = useQueryClient();
@@ -14,8 +18,10 @@ export default function ScheduleManager() {
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
   const [editInterval, setEditInterval] = useState(360);
   const [editEnabled, setEditEnabled] = useState(true);
+  const [editKeyword, setEditKeyword] = useState('');
   const [addCreatorId, setAddCreatorId] = useState<number | null>(null);
   const [addInterval, setAddInterval] = useState(360);
+  const [addKeyword, setAddKeyword] = useState('');
 
   const { data: schedules, isLoading } = useQuery<Schedule[]>({
     queryKey: ['schedules'],
@@ -44,6 +50,7 @@ export default function ScheduleManager() {
     setEditingSchedule(schedule);
     setEditInterval(schedule.interval_minutes);
     setEditEnabled(schedule.enabled);
+    setEditKeyword(schedule.extra_config?.keyword || '');
     setEditOpen(true);
   };
 
@@ -56,18 +63,18 @@ export default function ScheduleManager() {
 
   const handleSave = () => {
     if (!editingSchedule) return;
-    upsertMut.mutate({
-      creatorId: editingSchedule.creator_id,
-      data: { interval_minutes: editInterval, enabled: editEnabled },
-    });
+    const data: any = { interval_minutes: editInterval, enabled: editEnabled };
+    const c = getCreator(editingSchedule.creator_id);
+    if (isSearchCreator(c)) data.keyword = editKeyword;
+    upsertMut.mutate({ creatorId: editingSchedule.creator_id, data });
   };
 
   const handleAdd = () => {
     if (!addCreatorId) { message.warning('请选择创作者'); return; }
-    upsertMut.mutate({
-      creatorId: addCreatorId,
-      data: { interval_minutes: addInterval, enabled: true },
-    });
+    const data: any = { interval_minutes: addInterval, enabled: true };
+    const c = getCreator(addCreatorId);
+    if (isSearchCreator(c)) data.keyword = addKeyword;
+    upsertMut.mutate({ creatorId: addCreatorId, data });
   };
 
   const columns = [
@@ -159,6 +166,13 @@ export default function ScheduleManager() {
           <Select value={addInterval} onChange={setAddInterval}
             options={intervalOptions} style={{ width: '100%' }} />
         </div>
+        {addCreatorId && isSearchCreator(getCreator(addCreatorId)) && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 8 }}>搜索关键词</div>
+            <Input value={addKeyword} onChange={e => setAddKeyword(e.target.value)}
+              placeholder="输入搜索关键词（必填）" />
+          </div>
+        )}
       </Modal>
 
       <Modal title="编辑定时任务" open={editOpen} onOk={handleSave}
@@ -168,6 +182,13 @@ export default function ScheduleManager() {
           <Select value={editInterval} onChange={setEditInterval}
             options={intervalOptions} style={{ width: '100%' }} />
         </div>
+        {editingSchedule && isSearchCreator(getCreator(editingSchedule.creator_id)) && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 8 }}>搜索关键词</div>
+            <Input value={editKeyword} onChange={e => setEditKeyword(e.target.value)}
+              placeholder="输入搜索关键词（必填）" />
+          </div>
+        )}
         <div>
           <div style={{ marginBottom: 8 }}>启用状态</div>
           <Switch checked={editEnabled} onChange={setEditEnabled}

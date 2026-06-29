@@ -19,6 +19,7 @@ async def list_schedules(db: AsyncSession = Depends(get_db)):
         id=r.id, creator_id=r.creator_id,
         interval_minutes=r.interval_minutes, enabled=r.enabled,
         last_run_at=r.last_run_at, next_run_at=r.next_run_at,
+        extra_config=r.extra_config,
     ) for r in rows]
 
 @router.put("/{creator_id}", response_model=ScheduleResponse)
@@ -35,9 +36,14 @@ async def upsert_schedule(
         select(ScheduleConfig).where(ScheduleConfig.creator_id == creator_id)
     )).scalar_one_or_none()
 
+    extra_config = {}
+    if body.keyword:
+        extra_config["keyword"] = body.keyword
+
     if existing:
         existing.interval_minutes = body.interval_minutes
         existing.enabled = body.enabled
+        existing.extra_config = extra_config
         existing.next_run_at = beijing_now() + timedelta(minutes=body.interval_minutes)
         schedule = existing
     else:
@@ -45,6 +51,7 @@ async def upsert_schedule(
             creator_id=creator_id,
             interval_minutes=body.interval_minutes,
             enabled=body.enabled,
+            extra_config=extra_config,
             next_run_at=beijing_now() + timedelta(minutes=body.interval_minutes),
         )
         db.add(schedule)
@@ -55,6 +62,7 @@ async def upsert_schedule(
         id=schedule.id, creator_id=schedule.creator_id,
         interval_minutes=schedule.interval_minutes, enabled=schedule.enabled,
         last_run_at=schedule.last_run_at, next_run_at=schedule.next_run_at,
+        extra_config=schedule.extra_config,
     )
 
 @router.delete("/{creator_id}")

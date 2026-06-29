@@ -69,6 +69,12 @@ async def trigger_hot_crawl(
         await db.commit()
         await db.refresh(creator)
 
+    # 搜索类任务：将关键词存入 creator.extra_data，供定时调度时读取
+    if body.category == "search" and body.keyword:
+        creator.extra_data = {**(creator.extra_data or {}), "keyword": body.keyword}
+        await db.commit()
+        await db.refresh(creator)
+
     # 创建 session
     session = CrawlSession(
         creator_id=creator.id,
