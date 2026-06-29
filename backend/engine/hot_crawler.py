@@ -18,7 +18,6 @@ HOT_CATEGORIES = {
         {"id": "hot", "name": "热门视频", "desc": "当前正在流行的热门视频"},
     ],
     "douyin": [
-        {"id": "hot", "name": "热点榜", "desc": "抖音实时热点榜单"},
         {"id": "search", "name": "搜索", "desc": "关键词搜索 (需输入搜索词 + 浏览器登录)"},
     ],
 }
@@ -404,7 +403,7 @@ async def _enrich_items_from_detail(page, context, items: list[ContentItem], max
 
 
 async def _crawl_douyin_hot(category: str, max_items: int, cookie_str: str | None, keyword: str = "") -> list[ContentItem]:
-    """抖音热点/搜索 — Playwright 加载页面 + 点击筛选器"""
+    """抖音搜索 — Playwright 加载页面 + 点击筛选器"""
     import os
     from playwright.async_api import async_playwright
 
@@ -415,9 +414,9 @@ async def _crawl_douyin_hot(category: str, max_items: int, cookie_str: str | Non
     chrome_exe = next((p for p in chrome_paths if os.path.exists(p)), None)
 
     items: list[ContentItem] = []
+    headless = False  # 搜索需要登录，必须显示浏览器窗口
 
     async with async_playwright() as p:
-        headless = False if (category == "search") else True
         launch_args = {"headless": headless, "args": ["--no-sandbox", "--disable-setuid-sandbox"]}
         if chrome_exe:
             launch_args["executable_path"] = chrome_exe
@@ -454,11 +453,7 @@ async def _crawl_douyin_hot(category: str, max_items: int, cookie_str: str | Non
 
         page = await context.new_page()
 
-        # 选 URL
-        if category == "search" and keyword:
-            url = f"https://www.douyin.com/search/{keyword}?type=general"
-        else:
-            url = "https://www.douyin.com/hot"
+        url = f"https://www.douyin.com/search/{keyword}?type=general"
 
         logger.info(f"Loading Douyin: {url}")
         try:
