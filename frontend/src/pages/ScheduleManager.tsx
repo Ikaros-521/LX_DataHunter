@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Table, Button, Modal, Select, Switch, Space, Popconfirm, message, Input } from 'antd';
+import { Table, Button, Modal, Select, Switch, Space, Popconfirm, message, Input, InputNumber } from 'antd';
 import { ClockCircleOutlined, EditOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client from '../api/client';
@@ -119,17 +119,6 @@ export default function ScheduleManager() {
     },
   ];
 
-  const intervalOptions = [
-    { label: '30 分钟', value: 30 },
-    { label: '1 小时', value: 60 },
-    { label: '3 小时', value: 180 },
-    { label: '6 小时', value: 360 },
-    { label: '12 小时', value: 720 },
-    { label: '1 天', value: 1440 },
-    { label: '3 天', value: 4320 },
-    { label: '1 周', value: 10080 },
-  ];
-
   return (
     <div>
       <h3><ClockCircleOutlined /> 定时任务管理</h3>
@@ -162,9 +151,9 @@ export default function ScheduleManager() {
             }))} />
         </div>
         <div style={{ marginBottom: 16 }}>
-          <div style={{ marginBottom: 8 }}>执行间隔</div>
-          <Select value={addInterval} onChange={setAddInterval}
-            options={intervalOptions} style={{ width: '100%' }} />
+          <div style={{ marginBottom: 8 }}>执行间隔（分钟）</div>
+          <InputNumber min={5} max={10080} value={addInterval} onChange={v => setAddInterval(v || 360)}
+            addonAfter="分钟" style={{ width: '100%' }} />
         </div>
         {addCreatorId && isSearchCreator(getCreator(addCreatorId)) && (
           <div style={{ marginBottom: 16 }}>
@@ -178,9 +167,9 @@ export default function ScheduleManager() {
       <Modal title="编辑定时任务" open={editOpen} onOk={handleSave}
         onCancel={() => setEditOpen(false)} confirmLoading={upsertMut.isPending}>
         <div style={{ marginBottom: 16 }}>
-          <div style={{ marginBottom: 8 }}>执行间隔</div>
-          <Select value={editInterval} onChange={setEditInterval}
-            options={intervalOptions} style={{ width: '100%' }} />
+          <div style={{ marginBottom: 8 }}>执行间隔（分钟）</div>
+          <InputNumber min={5} max={10080} value={editInterval} onChange={v => setEditInterval(v || 360)}
+            addonAfter="分钟" style={{ width: '100%' }} />
         </div>
         {editingSchedule && isSearchCreator(getCreator(editingSchedule.creator_id)) && (
           <div style={{ marginBottom: 16 }}>
