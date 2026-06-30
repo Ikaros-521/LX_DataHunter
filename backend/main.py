@@ -27,6 +27,8 @@ from .api.schedules import router as schedules_router
 from .api.ws import router as ws_router
 from .api.credentials import router as credentials_router
 from .api.hot import router as hot_router
+from .api.downloads import router as downloads_router
+from .api.download_ws import router as download_ws_router
 from .config import settings
 from .database import engine
 from .models import Base
@@ -131,7 +133,18 @@ async def lifespan(app: FastAPI):
     logger.info("Database tables ensured")
     start_scheduler()
     logger.info("Scheduler started")
+
+    # ---- 启动下载引擎 ----
+    from .engine.downloader import download_engine
+    from .api.download_ws import broadcast_download_progress
+    download_engine.set_broadcast(broadcast_download_progress)
+    await download_engine.start()
+    logger.info("Download engine initialized")
+
     yield
+
+    # ---- 停止下载引擎 ----
+    await download_engine.stop()
     stop_scheduler()
     await engine.dispose()
     logger.info("FaPai Spider stopped")
@@ -181,6 +194,8 @@ app.include_router(schedules_router)
 app.include_router(ws_router)
 app.include_router(credentials_router)
 app.include_router(hot_router)
+app.include_router(downloads_router)
+app.include_router(download_ws_router)
 
 
 @app.get("/api/health")

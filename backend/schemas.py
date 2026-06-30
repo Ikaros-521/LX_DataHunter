@@ -143,3 +143,46 @@ class MessageResponse(BaseModel):
 
 class BatchDeleteRequest(BaseModel):
     session_ids: list[int]
+
+# ---- Download ----
+class DownloadBatchCreate(BaseModel):
+    content_ids: list[int] = Field(..., min_length=1, max_length=200, description="content_snapshots 的 id 列表")
+
+class DownloadTaskResponse(BaseModel):
+    id: int
+    content_snapshot_id: int
+    platform: str
+    content_id: str
+    title: str
+    status: str
+    progress: float
+    file_path: str
+    file_size: int
+    error_message: str = ""
+    retry_count: int = 0
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    url: str = ""
+
+    model_config = {"from_attributes": True}
+
+class DownloadListResponse(BaseModel):
+    total: int
+    items: list[DownloadTaskResponse]
+
+class DownloadBatchDeleteRequest(BaseModel):
+    task_ids: list[int]
+
+class DownloadStatsResponse(BaseModel):
+    total: int = 0
+    pending: int = 0
+    downloading: int = 0
+    completed: int = 0
+    failed: int = 0
+    total_size: int = 0  # bytes
+
+class YtdlpCheckResponse(BaseModel):
+    available: bool = False
+    version: str = ""
+    path: str = ""

@@ -9,7 +9,7 @@
   模式下启动 —— 此时 uvicorn 不会覆盖策略，Playwright 可正常启动。
 
 用法：
-  python run.py                 # 默认 8000 端口，不开启 reload（推荐，抓取可用）
+  python run.py                 # 默认 28000 端口，不开启 reload（推荐，抓取可用）
   python run.py --port 9000     # 指定端口
   python run.py --reload        # 开启热重载（注意：抓取会失败，仅开发调试用）
 
@@ -30,7 +30,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="启动 FaPai Spider 后端")
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--port", type=int, default=28000)
     parser.add_argument(
         "--reload",
         action="store_true",

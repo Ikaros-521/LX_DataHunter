@@ -36,7 +36,7 @@ function extractErrorMessage(error: any): string {
   }
   // 网络错误
   if (error.code === 'ERR_NETWORK' || error.message?.includes('Network')) {
-    return '无法连接到服务器，请确认后端已启动 (http://localhost:8000)';
+    return '无法连接到服务器，请确认后端已启动 (http://localhost:28000)';
   }
   // 超时
   if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {

@@ -122,6 +122,33 @@ class ScheduleConfig(Base):
     creator = relationship("MonitoredCreator", back_populates="schedule")
 
 
+class DownloadStatus(str, enum.Enum):
+    PENDING = "pending"
+    DOWNLOADING = "downloading"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class DownloadTask(Base):
+    """视频下载任务"""
+    __tablename__ = "download_tasks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    content_snapshot_id = Column(Integer, ForeignKey("content_snapshots.id"), nullable=False, index=True)
+    platform = Column(String(20), nullable=False, index=True)
+    content_id = Column(String(128), nullable=False)
+    title = Column(Text, default="")
+    status = Column(String(20), nullable=False, default="pending", index=True)
+    progress = Column(Float, default=0)
+    file_path = Column(String(500), default="")
+    file_size = Column(Integer, default=0)
+    error_message = Column(Text, default="")
+    retry_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=beijing_now)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+
+
 class PlatformCredential(Base):
     """平台登录凭证（Cookie），供爬虫携带请求"""
     __tablename__ = "platform_credentials"

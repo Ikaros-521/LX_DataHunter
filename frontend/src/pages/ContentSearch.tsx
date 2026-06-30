@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { Input, Select, DatePicker, Space, Button, message } from 'antd';
-import { SearchOutlined, ExportOutlined } from '@ant-design/icons';
+import { Input, Select, DatePicker, Space, Button, Popconfirm, message } from 'antd';
+import { SearchOutlined, ExportOutlined, DownloadOutlined } from '@ant-design/icons';
 import ContentTable from '../components/ContentTable';
-import { useContents, useCreators, usePlatforms } from '../api/queries';
+import { useContents, useCreators, usePlatforms, useBatchDownload } from '../api/queries';
 import dayjs from 'dayjs';
 
 const { RangePicker } = DatePicker;
@@ -16,6 +16,7 @@ export default function ContentSearch() {
   const [sort, setSort] = useState('likes');
   const [dateRange, setDateRange] = useState<[string, string] | null>(null);
   const [page, setPage] = useState(1);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
 
   const params: Record<string, any> = {
     page, page_size: 20, sort, order: 'desc',
@@ -29,6 +30,7 @@ export default function ContentSearch() {
   const { data, isLoading } = useContents(params);
   const { data: creatorsData } = useCreators({ page_size: 200 });
   const { data: platforms } = usePlatforms();
+  const batchDownloadMut = useBatchDownload();
 
   const handleSearch = () => {
     setSearchKeyword(keyword);
@@ -48,6 +50,26 @@ export default function ContentSearch() {
     a.click();
     URL.revokeObjectURL(url);
     message.success('导出成功');
+  };
+
+  const handleBatchDownload = () => {
+    // 仅下载 video 类型
+    const videoIds = (data?.items || [])
+      .filter((item) => item.content_type === 'video')
+      .filter((item) => selectedRowKeys.includes(item.id))
+      .map((item) => item.id);
+
+    if (!videoIds.length) {
+      message.warning('请选择至少一个视频内容进行下载');
+      return;
+    }
+
+    batchDownloadMut.mutate(videoIds, {
+      onSuccess: (res: any) => {
+        message.success(res.data?.message || '下载任务已创建');
+        setSelectedRowKeys([]);
+      },
+    });
   };
 
   return (
@@ -105,12 +127,30 @@ export default function ContentSearch() {
         <Button icon={<ExportOutlined />} onClick={handleExport}>导出</Button>
       </Space>
 
+      {selectedRowKeys.length > 0 && (
+        <Space style={{ marginBottom: 16 }}>
+          <Popconfirm
+            title={`确认下载选中的 ${selectedRowKeys.length} 个视频?`}
+            description="仅视频类型内容会被加入下载队列"
+            onConfirm={handleBatchDownload}
+          >
+            <Button type="primary" icon={<DownloadOutlined />}>
+              批量下载 {selectedRowKeys.length} 条
+            </Button>
+          </Popconfirm>
+        </Space>
+      )}
+
       <ContentTable
         data={data?.items || []}
         loading={isLoading}
         total={data?.total || 0}
         page={page}
-        onPageChange={setPage}
+        onPageChange={(p) => { setPage(p); setSelectedRowKeys([]); }}
+        rowSelection={{
+          selectedRowKeys,
+          onChange: (keys) => setSelectedRowKeys(keys as number[]),
+        }}
       />
     </div>
   );

@@ -1,5 +1,6 @@
 import { Table, Tag, Image } from 'antd';
 import type { Content } from '../api/queries';
+import type { TableRowSelection } from 'antd/es/table/interface';
 import dayjs from 'dayjs';
 
 interface ContentTableProps {
@@ -9,9 +10,10 @@ interface ContentTableProps {
   page?: number;
   onPageChange?: (page: number) => void;
   onRowClick?: (record: Content) => void;
+  rowSelection?: TableRowSelection<Content>;
 }
 
-export default function ContentTable({ data, loading, total, page, onPageChange, onRowClick }: ContentTableProps) {
+export default function ContentTable({ data, loading, total, page, onPageChange, onRowClick, rowSelection }: ContentTableProps) {
   const columns = [
     {
       title: '封面', dataIndex: 'cover_url', key: 'cover', width: 80,
@@ -39,6 +41,7 @@ export default function ContentTable({ data, loading, total, page, onPageChange,
       rowKey="id"
       loading={loading}
       size="small"
+      rowSelection={rowSelection}
       pagination={total ? { current: page, total, onChange: onPageChange, pageSize: 20 } : false}
       onRow={(record) => ({
         onClick: () => onRowClick?.(record),

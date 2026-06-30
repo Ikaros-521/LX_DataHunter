@@ -45,6 +45,22 @@ export interface PaginatedResponse<T> {
   total: number; items: T[];
 }
 
+// ---- Download ----
+export interface DownloadTask {
+  id: number; content_snapshot_id: number;
+  platform: string; content_id: string; title: string;
+  status: 'pending' | 'downloading' | 'completed' | 'failed';
+  progress: number; file_path: string; file_size: number;
+  error_message: string; retry_count: number;
+  created_at: string; started_at: string | null; finished_at: string | null;
+  url: string;
+}
+
+export interface DownloadStats {
+  total: number; pending: number; downloading: number;
+  completed: number; failed: number; total_size: number;
+}
+
 // --- Hooks ---
 export function usePlatforms() {
   return useQuery<Platform[]>({ queryKey: ['platforms'], queryFn: () => client.get('/platforms').then(r => r.data) });
@@ -165,5 +181,92 @@ export function useClearAllSessions() {
       qc.invalidateQueries({ queryKey: ['sessions'] });
       qc.invalidateQueries({ queryKey: ['creators'] });
     },
+  });
+}
+
+// ---- Download Hooks ----
+export function useDownloadTasks(params?: Record<string, any>) {
+  return useQuery<PaginatedResponse<DownloadTask>>({
+    queryKey: ['downloads', params],
+    queryFn: () => client.get('/downloads', { params }).then(r => r.data),
+    refetchInterval: (query) => {
+      // 如果有下载中的任务，自动轮询
+      const items = query.state.data?.items;
+      if (items?.some(t => t.status === 'downloading' || t.status === 'pending')) {
+        return 3000;
+      }
+      return false;
+    },
+  });
+}
+
+export function useDownloadStats() {
+  return useQuery<DownloadStats>({
+    queryKey: ['download-stats'],
+    queryFn: () => client.get('/downloads/stats').then(r => r.data),
+    refetchInterval: 5000,
+  });
+}
+
+export function useBatchDownload() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (contentIds: number[]) => client.post('/downloads/batch', { content_ids: contentIds }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['downloads'] });
+      qc.invalidateQueries({ queryKey: ['download-stats'] });
+    },
+  });
+}
+
+export function useRetryDownload() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (taskId: number) => client.post(`/downloads/${taskId}/retry`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['downloads'] });
+      qc.invalidateQueries({ queryKey: ['download-stats'] });
+    },
+  });
+}
+
+export function useDeleteDownload() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (taskId: number) => client.delete(`/downloads/${taskId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['downloads'] });
+      qc.invalidateQueries({ queryKey: ['download-stats'] });
+    },
+  });
+}
+
+export function useBatchDeleteDownloads() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (taskIds: number[]) => client.delete('/downloads/batch', { data: { task_ids: taskIds } }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['downloads'] });
+      qc.invalidateQueries({ queryKey: ['download-stats'] });
+    },
+  });
+}
+
+export function useCleanupDownloads() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (status?: string) => client.delete('/downloads/cleanup', { params: status ? { status } : {} }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['downloads'] });
+      qc.invalidateQueries({ queryKey: ['download-stats'] });
+    },
+  });
+}
+
+export function useCheckYtdlp() {
+  return useQuery<{ available: boolean; version: string; path: string }>({
+    queryKey: ['ytdlp-check'],
+    queryFn: () => client.get('/downloads/check-ytdlp').then(r => r.data),
+    staleTime: 60000, // 1 分钟内不重新检查
   });
 }

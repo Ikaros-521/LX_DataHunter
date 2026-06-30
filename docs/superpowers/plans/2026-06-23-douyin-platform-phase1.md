@@ -1540,16 +1540,16 @@ else:
 
 ```bash
 cd E:/Github_Pro/FaPai_Spider
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 &
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 28000 &
 
 # Test health
-curl http://localhost:8000/api/health
+curl http://localhost:28000/api/health
 
 # Test platforms
-curl http://localhost:8000/api/v1/platforms
+curl http://localhost:28000/api/v1/platforms
 
 # Test creators
-curl -X POST http://localhost:8000/api/v1/creators \
+curl -X POST http://localhost:28000/api/v1/creators \
   -H "Content-Type: application/json" \
   -d '{"platform":"douyin","platform_uid":"MS4wLjABAAAAuWZZlvIC2SHOWYQ4LkdxH1zcYBZWtVtARoh9wCpYsPYA3TeZ2b8g7p4hBQOEIj3y"}'
 ```
@@ -1589,8 +1589,8 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      '/api': 'http://localhost:8000',
-      '/ws': { target: 'ws://localhost:8000', ws: true },
+      '/api': 'http://localhost:28000',
+      '/ws': { target: 'ws://localhost:28000', ws: true },
     },
   },
   build: {
@@ -2758,11 +2758,11 @@ This places built files in `../backend/static/`.
 - [ ] **Step 4: Start and smoke test**
 
 ```bash
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 28000
 ```
 
-Open http://localhost:8000 — should see the React app.
-API docs at http://localhost:8000/docs.
+Open http://localhost:28000 — should see the React app.
+API docs at http://localhost:28000/docs.
 
 - [ ] **Step 5: Add a creator and trigger crawl**
 
@@ -2796,4 +2796,4 @@ git commit -m "feat: integration — build, deps, README"
 - [ ] 前端 `npm run dev` 后 http://localhost:3000 显示 Dashboard
 - [ ] 前端能添加创作者、触发爬取、查看内容搜索
 - [ ] `npm run build` 产物正确输出到 `backend/static/`
-- [ ] 直接 `python -m uvicorn backend.main:app` 访问 `http://localhost:8000` 显示前端
+- [ ] 直接 `python -m uvicorn backend.main:app` 访问 `http://localhost:28000` 显示前端

@@ -38,10 +38,10 @@ cd frontend && npm install && npm run build
 python run.py
 
 # 或直接用 uvicorn（注意：不要加 --reload，否则 Windows 下抓取会失败）
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+python -m uvicorn backend.main:app --host 0.0.0.0 --port 28000
 ```
 
-Open http://localhost:8000 for the app, or http://localhost:8000/docs for the API docs.
+Open http://localhost:28000 for the app, or http://localhost:28000/docs for the API docs.
 
 > **Windows 注意**：不要用 `--reload` 启动后端。uvicorn 的热重载在 Windows 上会
 > 强制使用不支持子进程的 `SelectorEventLoop`，导致抖音/B站的 Playwright 抓取报
@@ -51,9 +51,9 @@ Open http://localhost:8000 for the app, or http://localhost:8000/docs for the AP
 
 ```bash
 # Backend：开发时如需热重载，可临时用 --reload，但抓取功能会不可用
-python -m uvicorn backend.main:app --reload --port 8000
+python -m uvicorn backend.main:app --reload --port 28000
 
-# Frontend dev server (port 3000, proxies API to :8000)
+# Frontend dev server (port 3000, proxies API to :28000)
 cd frontend && npm run dev
 ```
 

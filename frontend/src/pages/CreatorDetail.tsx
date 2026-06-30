@@ -1,11 +1,11 @@
 import { useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { Descriptions, Space, Button, Drawer, Tag, Row, Col, message, Popconfirm, Select } from 'antd';
-import { ThunderboltOutlined, ClearOutlined } from '@ant-design/icons';
+import { ThunderboltOutlined, ClearOutlined, DownloadOutlined } from '@ant-design/icons';
 import PlatformTag from '../components/PlatformTag';
 import TrendChart from '../components/TrendChart';
 import ContentTable from '../components/ContentTable';
-import { useCreator, useSessions, useSessionContents, useTriggerCrawl, useClearCreatorSessions } from '../api/queries';
+import { useCreator, useSessions, useSessionContents, useTriggerCrawl, useClearCreatorSessions, useBatchDownload } from '../api/queries';
 import dayjs from 'dayjs';
 import type { Content } from '../api/queries';
 
@@ -20,6 +20,8 @@ export default function CreatorDetail() {
   const { data: creator, isLoading } = useCreator(creatorId);
   const crawlMutation = useTriggerCrawl();
   const clearSessionsMut = useClearCreatorSessions();
+  const batchDownloadMut = useBatchDownload();
+  const [selectedContentKeys, setSelectedContentKeys] = useState<number[]>([]);
 
   // 关键词筛选状态
   const [filterKeyword, setFilterKeyword] = useState<string>('');
@@ -145,14 +147,48 @@ export default function CreatorDetail() {
         </Space>
 
         {selectedSessionId && (
-          <ContentTable
-            data={contentsData?.items || []}
-            loading={contentsLoading}
-            total={contentsData?.total}
-            page={contentPage}
-            onPageChange={setContentPage}
-            onRowClick={(content) => { setSelectedContent(content); setDrawerOpen(true); }}
-          />
+          <>
+            {selectedContentKeys.length > 0 && (
+              <Space style={{ marginBottom: 12 }}>
+                <Popconfirm
+                  title={`确认下载选中的 ${selectedContentKeys.length} 个视频?`}
+                  description="仅视频类型内容会被加入下载队列"
+                  onConfirm={() => {
+                    const videoIds = (contentsData?.items || [])
+                      .filter((item) => item.content_type === 'video')
+                      .filter((item) => selectedContentKeys.includes(item.id))
+                      .map((item) => item.id);
+                    if (videoIds.length) {
+                      batchDownloadMut.mutate(videoIds, {
+                        onSuccess: (res: any) => {
+                          message.success(res.data?.message || '下载任务已创建');
+                          setSelectedContentKeys([]);
+                        },
+                      });
+                    } else {
+                      message.warning('选中的内容中没有视频类型');
+                    }
+                  }}
+                >
+                  <Button type="primary" size="small" icon={<DownloadOutlined />}>
+                    批量下载 {selectedContentKeys.length} 条
+                  </Button>
+                </Popconfirm>
+              </Space>
+            )}
+            <ContentTable
+              data={contentsData?.items || []}
+              loading={contentsLoading}
+              total={contentsData?.total}
+              page={contentPage}
+              onPageChange={(p) => { setContentPage(p); setSelectedContentKeys([]); }}
+              onRowClick={(content) => { setSelectedContent(content); setDrawerOpen(true); }}
+              rowSelection={{
+                selectedRowKeys: selectedContentKeys,
+                onChange: (keys) => setSelectedContentKeys(keys as number[]),
+              }}
+            />
+          </>
         )}
       </div>
 

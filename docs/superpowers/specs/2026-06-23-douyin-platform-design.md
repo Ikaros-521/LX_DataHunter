@@ -371,7 +371,7 @@ cd frontend && npm install && npm run build
 
 # 启动
 python backend/main.py
-# → http://localhost:8000 (API + UI)
+# → http://localhost:28000 (API + UI)
 ```
 
 ---
