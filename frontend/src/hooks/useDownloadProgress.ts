@@ -8,7 +8,7 @@ import type { DownloadTask } from '../api/queries';
 export default function useDownloadProgress() {
   const queryClient = useQueryClient();
   const wsRef = useRef<WebSocket | null>(null);
-  const heartbeatRef = useRef<ReturnType<typeof setInterval>>();
+  const heartbeatRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';

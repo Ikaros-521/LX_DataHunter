@@ -2,12 +2,15 @@
 import asyncio
 import logging
 import os
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse
 from sqlalchemy import select, func, delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import settings
 from backend.database import get_db
 from backend.models import (
     DownloadTask, DownloadStatus, ContentSnapshot, CrawlSession,
@@ -238,6 +241,40 @@ async def get_download(task_id: int, db: AsyncSession = Depends(get_db)):
             url = snapshot.url
 
     return _task_to_response(task, url)
+
+
+# ---- 播放 / 另存为 ----
+
+@router.get("/{task_id}/file")
+async def download_task_file(
+    task_id: int,
+    download: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    """提供已下载视频的播放/下载。
+
+    - 默认 inline（``Content-Disposition: inline``）：供前端 ``<video>`` 在线预览。
+    - ``?download=true``：attachment，触发浏览器"另存为"，文件名沿用下载时的标题。
+    """
+    task = await db.get(DownloadTask, task_id)
+    if not task:
+        raise HTTPException(404, f"下载任务不存在: id={task_id}")
+    if task.status != DownloadStatus.COMPLETED.value:
+        raise HTTPException(400, "任务尚未完成，暂无文件可播放")
+    if not task.file_path or not os.path.exists(task.file_path):
+        raise HTTPException(404, "本地文件不存在（可能已被删除）")
+
+    # 防御：确认文件确实落在 downloads_dir 下，避免被构造路径越界读取
+    real_path = Path(task.file_path).resolve()
+    if not real_path.is_relative_to(settings.downloads_dir.resolve()):
+        raise HTTPException(403, "非法文件路径")
+
+    return FileResponse(
+        str(real_path),
+        media_type="video/mp4",
+        filename=real_path.name,
+        content_disposition_type="attachment" if download else "inline",
+    )
 
 
 # ---- 重试失败任务 ----

@@ -235,21 +235,26 @@ class DownloadEngine:
                 output_dir / f"{safe_title}_{date_str}.%(ext)s"
             )
 
-            # 写临时 cookie 文件（ Netscape 格式 ）
-            cookie_file = None
-            if cookie_str:
-                cookie_file = await self._write_cookie_file(cookie_str, url)
-            elif task.platform == "douyin":
-                cookie_file = await self._fetch_guest_cookies(task.platform)
-
+            # 下载：按平台分流。抖音走 Playwright 拦截直链（见 _run_douyin_download），
+            # 不再依赖 yt-dlp（其抖音提取器长期不稳）；其它平台继续用 yt-dlp，
+            # 必要时写临时 cookie 文件。cookie_file 仅 yt-dlp 路径会用到。
+            cookie_file: str | None = None
             try:
-                file_path, file_size = await self._run_ytdlp(
-                    url=url,
-                    output_template=output_template,
-                    cookie_file=cookie_file,
-                    task_id=task_id,
-                    platform=task.platform,
-                )
+                if task.platform == "douyin":
+                    file_path, file_size = await self._run_douyin_download(
+                        url=url,
+                        output_template=output_template,
+                        task_id=task_id,
+                    )
+                else:
+                    if cookie_str:
+                        cookie_file = await self._write_cookie_file(cookie_str, url)
+                    file_path, file_size = await self._run_ytdlp(
+                        url=url,
+                        output_template=output_template,
+                        cookie_file=cookie_file,
+                        task_id=task_id,
+                    )
 
                 # 更新成功
                 task.status = DownloadStatus.COMPLETED.value
@@ -291,15 +296,21 @@ class DownloadEngine:
                     except Exception:
                         pass
 
-    async def _run_ytdlp(
-        self,
+    @staticmethod
+    def _build_ytdlp_cmd(
         url: str,
         output_template: str,
         cookie_file: str | None,
-        task_id: int,
-        platform: str = "",
-    ) -> tuple[Path, int]:
-        """执行 yt-dlp 下载，返回 (file_path, file_size)。"""
+    ) -> list[str]:
+        """构造 yt-dlp 命令行参数（纯函数，无 I/O，便于单元测试）。
+
+        抖音已不走 yt-dlp（改用 ``_run_douyin_download`` 拦截直链），此处仅
+        服务于 B 站等平台。刻意不使用 ``--cookies-from-browser``：新版 Chrome
+        (127+) 用 App-Bound Encryption + DPAPI 加密 cookie，yt-dlp 在 Windows
+        上解不开，会抛 "Failed to decrypt with DPAPI" (yt-dlp#10927) 并以退出码
+        1 中止，连带后续 cookie_file 也用不上。需要 cookie 时统一通过 cookie_file
+        传入（``PlatformCredential`` 存的 cookie）。
+        """
         cmd = [
             "yt-dlp",
             "--no-playlist",
@@ -317,14 +328,24 @@ class DownloadEngine:
             "--encoding", "UTF-8",
             "-o", output_template,
         ]
-
-        if platform == "douyin":
-            cmd.extend(["--cookies-from-browser", "chrome"])
-
         if cookie_file:
             cmd.extend(["--cookies", cookie_file])
-
         cmd.append(url)
+        return cmd
+
+    async def _run_ytdlp(
+        self,
+        url: str,
+        output_template: str,
+        cookie_file: str | None,
+        task_id: int,
+    ) -> tuple[Path, int]:
+        """执行 yt-dlp 下载，返回 (file_path, file_size)。"""
+        cmd = self._build_ytdlp_cmd(
+            url=url,
+            output_template=output_template,
+            cookie_file=cookie_file,
+        )
 
         logger.info(f"yt-dlp starting: task={task_id}, url={url}")
         logger.debug(f"yt-dlp cmd: {' '.join(cmd)}")
@@ -383,6 +404,151 @@ class DownloadEngine:
 
         file_size = downloaded_path.stat().st_size
         return downloaded_path, file_size
+
+    # ---- 抖音专用下载（Playwright 拦截直链） ----
+
+    async def _run_douyin_download(
+        self,
+        url: str,
+        output_template: str,
+        task_id: int,
+    ) -> tuple[Path, int]:
+        """抖音专用下载：Playwright 拦截 aweme detail 接口拿无水印直链，httpx 下载。
+
+        yt-dlp 的抖音提取器长期不稳定（频繁报 "Fresh cookies needed"、空 JSON），
+        这里改让浏览器自身完成签名/反爬，直接拦截 ``/aweme/v1/web/aweme/detail``
+        的响应拿到视频直链，再用 httpx 流式下载。复用了 hot_crawler 已验证的
+        detail 拦截套路。返回 (file_path, file_size)。
+        """
+        import httpx
+        from playwright.async_api import async_playwright
+
+        ua = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        )
+        detail_pattern = "/aweme/v1/web/aweme/detail"
+        captured: dict = {}
+
+        chrome_exe = next((p for p in CHROME_PATHS if os.path.exists(p)), None)
+
+        logger.info(f"[douyin] intercepting video url for task={task_id}, url={url}")
+        async with async_playwright() as p:
+            launch_args: dict[str, Any] = {
+                "headless": True,
+                "args": ["--no-sandbox", "--disable-setuid-sandbox"],
+            }
+            if chrome_exe:
+                launch_args["executable_path"] = chrome_exe
+            browser = await p.chromium.launch(**launch_args)
+            try:
+                context = await browser.new_context(user_agent=ua, locale="zh-CN")
+                page = await context.new_page()
+
+                async def on_resp(response):
+                    try:
+                        if detail_pattern in response.url:
+                            captured["detail"] = await response.json()
+                    except Exception:
+                        pass
+
+                page.on("response", on_resp)
+                # 直接导航目标 url（含短链），浏览器自动跟跳转；detail XHR 由页面 JS 发起
+                await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                # 轮询等待 detail XHR 返回（最多 ~15s）
+                for _ in range(30):
+                    if "detail" in captured:
+                        break
+                    await asyncio.sleep(0.5)
+
+                cookies = await context.cookies()
+            finally:
+                await browser.close()
+
+        detail = captured.get("detail") or {}
+        aweme = detail.get("aweme_detail") or {}
+        video_url = self._pick_douyin_video_url(aweme)
+        if not video_url:
+            raise RuntimeError(
+                "未能从抖音详情接口拦截到视频直链"
+                "（可能弹了验证码或页面结构变化）"
+                f"；aweme_detail keys={list(aweme.keys())[:8]}"
+            )
+        video_url = self._to_no_watermark(video_url)
+
+        # 用浏览器拿到的 cookie + UA/Referer 直接下载，规避反爬
+        cookie_header = "; ".join(
+            f"{c['name']}={c['value']}"
+            for c in cookies
+            if "douyin" in (c.get("domain") or "")
+        )
+        headers = {
+            "User-Agent": ua,
+            "Referer": "https://www.douyin.com/",
+            "Cookie": cookie_header,
+        }
+
+        output_path = Path(output_template.replace("%(ext)s", "mp4"))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        logger.info(f"[douyin] downloading task={task_id} -> {video_url[:120]}...")
+        written = 0
+        total = 0
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0, connect=15.0),
+            follow_redirects=True,
+            headers=headers,
+        ) as client:
+            async with client.stream("GET", video_url) as r:
+                if r.status_code != 200:
+                    body = (await r.aread())[:300]
+                    raise RuntimeError(
+                        f"视频下载 HTTP {r.status_code}: {body!r}"
+                    )
+                total = int(r.headers.get("Content-Length", "0") or 0)
+                with open(output_path, "wb") as f:
+                    async for chunk in r.aiter_bytes(chunk_size=1 << 16):
+                        f.write(chunk)
+                        written += len(chunk)
+                        if total:
+                            await self._update_progress(
+                                task_id, written / total * 100
+                            )
+
+        if total:
+            await self._update_progress(task_id, 100)
+        return output_path, output_path.stat().st_size
+
+    @staticmethod
+    def _pick_douyin_video_url(aweme_detail: dict) -> str | None:
+        """从 aweme_detail 里取视频直链。
+
+        优先 ``video.play_addr.url_list``，回退 ``play_addr_h264``，再回退
+        ``bit_rate[].play_addr``。纯函数，便于单测。
+        """
+        video = (aweme_detail or {}).get("video") or {}
+        for key in ("play_addr", "play_addr_h264"):
+            url_list = (video.get(key) or {}).get("url_list") or []
+            if url_list and url_list[0]:
+                return url_list[0]
+        for br in video.get("bit_rate") or []:
+            url_list = ((br or {}).get("play_addr") or {}).get("url_list") or []
+            if url_list and url_list[0]:
+                return url_list[0]
+        return None
+
+    @staticmethod
+    def _to_no_watermark(url: str) -> str:
+        """把抖音 play_addr 直链转为无水印版本。
+
+        抖音视频 URL 路径里的 ``/playwm/`` 表示带水印，换成 ``/play/`` 即无水印
+        （社区通用、长期稳定的做法）。若 URL 不含该标记则原样返回——仍可下载，
+        只是可能带水印。
+        """
+        if "/playwm/" in url:
+            return url.replace("/playwm/", "/play/", 1)
+        return url
 
     async def _find_downloaded_file(self, output_dir: Path, url: str) -> Path | None:
         """在输出目录中查找最近下载的文件。"""
@@ -477,109 +643,6 @@ class DownloadEngine:
             return path
         except Exception as e:
             logger.warning(f"Failed to write cookie file: {e}")
-            return None
-
-    async def _fetch_guest_cookies(self, platform: str) -> str | None:
-        """用 headless 浏览器抓取抖音游客 cookie，写入 Netscape 临时文件。
-
-        yt-dlp 下载抖音要求携带 cookie（游客 cookie 即可），关键是 ttwid。
-        轮询等待 ttwid 出现，超时 15 秒，失败返回 None。
-        """
-        if platform != "douyin":
-            return None
-
-        from playwright.async_api import async_playwright
-
-        chrome_exe = next((p for p in CHROME_PATHS if os.path.exists(p)), None)
-
-        logger.info("Fetching fresh guest cookies from douyin.com...")
-        try:
-            async with async_playwright() as p:
-                launch_args: dict[str, Any] = {
-                    "headless": True,
-                    "args": ["--no-sandbox", "--disable-setuid-sandbox"],
-                }
-                if chrome_exe:
-                    launch_args["executable_path"] = chrome_exe
-                browser = await p.chromium.launch(**launch_args)
-                try:
-                    context = await browser.new_context(
-                        user_agent=(
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/131.0.0.0 Safari/537.36"
-                        ),
-                        locale="zh-CN",
-                    )
-                    page = await context.new_page()
-                    await page.goto(
-                        "https://www.douyin.com/",
-                        wait_until="domcontentloaded",
-                        timeout=45000,
-                    )
-                    await asyncio.sleep(2)
-
-                    # 轮询等待 ttwid cookie 就位
-                    ttwid_found = False
-                    for i in range(20):
-                        cookies = await context.cookies()
-                        names = {c["name"] for c in cookies}
-                        if "ttwid" in names:
-                            ttwid_found = True
-                            logger.info(
-                                f"ttwid found after {i + 3}s, "
-                                f"total cookies: {len(cookies)}, "
-                                f"names: {sorted(names)}"
-                            )
-                            break
-                        if i == 5:
-                            await page.evaluate("window.scrollTo(0, 300)")
-                        await asyncio.sleep(1)
-
-                    if not ttwid_found:
-                        cookies = await context.cookies()
-                        names = {c["name"] for c in cookies}
-                        logger.warning(
-                            f"ttwid not found after 22s. "
-                            f"Captured {len(cookies)} cookies: {sorted(names)}"
-                        )
-
-                    if not cookies:
-                        logger.warning("No guest cookies captured from douyin.com")
-                        return None
-
-                    fd, path = tempfile.mkstemp(suffix=".txt", prefix="ytdlp_guest_")
-                    lines = [
-                        "# Netscape HTTP Cookie File",
-                        "# This is a generated file!  Do not edit.",
-                        "",
-                    ]
-                    long_expiry = int(datetime.now().timestamp()) + 10 * 365 * 86400
-                    for c in cookies:
-                        domain = c.get("domain", "")
-                        if not domain:
-                            continue
-                        if not domain.startswith("."):
-                            domain = "." + domain
-                        name = c.get("name", "")
-                        value = c.get("value", "")
-                        if not name or not value:
-                            continue
-                        path_val = c.get("path", "/")
-                        secure = "TRUE" if c.get("secure") else "FALSE"
-                        lines.append(
-                            f"{domain}\tTRUE\t{path_val}\t{secure}\t{long_expiry}\t{name}\t{value}"
-                        )
-                    os.write(fd, "\n".join(lines).encode("utf-8"))
-                    os.close(fd)
-                    logger.info(
-                        f"Guest cookies written: {len(cookies)} cookies, file={path}"
-                    )
-                    return path
-                finally:
-                    await browser.close()
-        except Exception as e:
-            logger.warning(f"Failed to fetch guest cookies: {e}")
             return None
 
     def _build_output_dir(self, platform: str) -> Path:

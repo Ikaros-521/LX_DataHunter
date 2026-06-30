@@ -1,19 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   Row, Col, Table, Tag, Button, Select, Space, Progress, Popconfirm,
-  message, Alert, Tooltip, Dropdown,
+  message, Alert, Tooltip, Dropdown, Modal,
 } from 'antd';
 import {
   DownloadOutlined, DeleteOutlined, ReloadOutlined,
   CheckCircleOutlined, ClockCircleOutlined, CloseCircleOutlined,
   LoadingOutlined, ClearOutlined, CloudDownloadOutlined,
-  WarningOutlined, PlayCircleOutlined,
+  WarningOutlined, PlayCircleOutlined, EyeOutlined,
 } from '@ant-design/icons';
 import StatCard from '../components/StatCard';
 import PlatformTag from '../components/PlatformTag';
 import useDownloadProgress from '../hooks/useDownloadProgress';
 import {
-  useDownloadTasks, useDownloadStats, useBatchDownload,
+  useDownloadTasks, useDownloadStats,
   useRetryDownload, useDeleteDownload, useBatchDeleteDownloads,
   useCleanupDownloads, useCheckYtdlp,
 } from '../api/queries';
@@ -48,6 +48,11 @@ export default function DownloadManager() {
   const [platformFilter, setPlatformFilter] = useState<string | undefined>();
   const [page, setPage] = useState(1);
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
+  const [previewTask, setPreviewTask] = useState<DownloadTask | null>(null);
+
+  // 已下载文件的访问 URL（同源相对路径）。download=true 触发浏览器"另存为"。
+  const fileUrl = (id: number, download = false) =>
+    `/api/v1/downloads/${id}/file${download ? '?download=true' : ''}`;
 
   // 订阅 WebSocket 进度
   useDownloadProgress();
@@ -119,7 +124,13 @@ export default function DownloadManager() {
   const columns = [
     {
       title: '标题', dataIndex: 'title', key: 'title', ellipsis: true,
-      render: (t: string) => t || '(无标题)',
+      render: (t: string, record: DownloadTask) => {
+        const title = t || '(无标题)';
+        // 悬停标题可看到本地文件位置
+        return record.file_path ? (
+          <Tooltip title={`📁 ${record.file_path}`}><span>{title}</span></Tooltip>
+        ) : <span>{title}</span>;
+      },
     },
     {
       title: '平台', dataIndex: 'platform', key: 'platform', width: 80,
@@ -159,7 +170,7 @@ export default function DownloadManager() {
       render: (t: string) => t ? dayjs(t).format('YYYY-MM-DD HH:mm:ss') : '-',
     },
     {
-      title: '操作', key: 'actions', width: 140,
+      title: '操作', key: 'actions', width: 200,
       render: (_: any, record: DownloadTask) => (
         <Space size="small">
           {record.status === 'failed' && (
@@ -167,14 +178,32 @@ export default function DownloadManager() {
               <Button size="small" icon={<ReloadOutlined />} onClick={() => handleRetry(record.id)} />
             </Tooltip>
           )}
-          {record.status === 'completed' && record.url && (
-            <Tooltip title="打开原文">
-              <Button
-                size="small"
-                icon={<PlayCircleOutlined />}
-                onClick={() => window.open(record.url, '_blank')}
-              />
-            </Tooltip>
+          {record.status === 'completed' && (
+            <>
+              <Tooltip title="预览">
+                <Button
+                  size="small"
+                  icon={<EyeOutlined />}
+                  onClick={() => setPreviewTask(record)}
+                />
+              </Tooltip>
+              <Tooltip title="另存为">
+                <Button
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  href={fileUrl(record.id, true)}
+                />
+              </Tooltip>
+              {record.url && (
+                <Tooltip title="打开原文">
+                  <Button
+                    size="small"
+                    icon={<PlayCircleOutlined />}
+                    onClick={() => window.open(record.url, '_blank')}
+                  />
+                </Tooltip>
+              )}
+            </>
           )}
           <Popconfirm
             title="确认删除?"
@@ -312,6 +341,30 @@ export default function DownloadManager() {
         } : false}
         locale={{ emptyText: '暂无下载任务' }}
       />
+
+      {/* 视频预览 */}
+      <Modal
+        open={!!previewTask}
+        title={previewTask?.title || '视频预览'}
+        footer={null}
+        onCancel={() => setPreviewTask(null)}
+        width={720}
+        destroyOnClose
+      >
+        {previewTask && (
+          <>
+            <video
+              controls
+              autoPlay
+              src={fileUrl(previewTask.id)}
+              style={{ width: '100%', maxHeight: '60vh', background: '#000' }}
+            />
+            <div style={{ marginTop: 8, color: '#888', fontSize: 12, wordBreak: 'break-all' }}>
+              文件位置：{previewTask.file_path || '未知'}
+            </div>
+          </>
+        )}
+      </Modal>
     </div>
   );
 }
