@@ -100,7 +100,13 @@ class AnalysisEngine:
         worker_count = settings.max_concurrent_analyses
         for i in range(worker_count):
             self._workers.append(asyncio.create_task(self._worker(i)))
-        logger.info(f"Analysis engine started: {worker_count} workers")
+        loop_type = type(asyncio.get_running_loop()).__name__
+        logger.info(f"Analysis engine started: {worker_count} workers on {loop_type}")
+        if loop_type == "SelectorEventLoop":
+            logger.warning(
+                "当前事件循环是 SelectorEventLoop，不支持子进程——ffmpeg 抽音频会抛 "
+                "NotImplementedError。Windows 下请用 python run.py 启动（不要加 --reload）。"
+            )
 
     async def stop(self):
         """停止分析引擎。"""
@@ -230,8 +236,9 @@ class AnalysisEngine:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                msg = str(e)[:500]
-                logger.error(f"Analysis failed: {analysis_id}, error={msg}")
+                # 用 type(e).__name__ + exc_info，避免 NotImplementedError 等空消息异常被吞掉
+                msg = f"{type(e).__name__}: {e}"[:500]
+                logger.error(f"Analysis failed: {analysis_id}, error={msg}", exc_info=True)
                 a.retry_count += 1
                 if a.retry_count >= settings.max_analysis_retries:
                     await self._fail(db, a, msg)
