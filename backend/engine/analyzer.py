@@ -252,7 +252,9 @@ class AnalysisEngine:
 
     async def _extract_audio(self, video_path: str) -> str:
         """用 ffmpeg 抽出 16k 单声道 wav。"""
-        out = tempfile.mktemp(prefix="fapai_audio_", suffix=".wav")
+        # mkstemp（而非已弃用的 mktemp）：与 download_engine 一致，避免竞态
+        fd, out = tempfile.mkstemp(prefix="fapai_audio_", suffix=".wav")
+        os.close(fd)  # ffmpeg 会自己写这个文件
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-y", "-i", video_path,
             "-vn", "-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le",

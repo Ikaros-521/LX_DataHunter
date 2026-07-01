@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import settings
 from backend.database import get_db
 from backend.models import (
-    VideoAnalysis, AnalysisStatus, DownloadTask, DownloadStatus, ContentSnapshot,
+    VideoAnalysis, AnalysisStatus, DownloadTask, DownloadStatus,
 )
 from backend.schemas import (
     VideoAnalysisResponse, AnalysisListResponse, AnalysisCreateRequest,
