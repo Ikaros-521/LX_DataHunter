@@ -9,3 +9,4 @@ scrapling[fetchers]>=0.4.9
 bilibili-api-dev
 httpx>=0.27
 yt-dlp
+faster-whisper
