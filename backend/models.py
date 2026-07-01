@@ -160,3 +160,44 @@ class PlatformCredential(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=beijing_now)
     updated_at = Column(DateTime, default=beijing_now, onupdate=beijing_now)
+
+
+class AnalysisStatus(str, enum.Enum):
+    PENDING = "pending"
+    EXTRACTING = "extracting"
+    TRANSCRIBING = "transcribing"
+    ANALYZING = "analyzing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class VideoAnalysis(Base):
+    """单个已下载视频的分析结果（与 download_task 1:1）。
+
+    ASR 结果（asr_segments/transcript）与 LLM 结果（script_analysis/
+    content_summary）分字段存储，便于重跑 LLM 时复用已缓存 ASR。
+    """
+    __tablename__ = "video_analyses"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    download_task_id = Column(Integer, ForeignKey("download_tasks.id"), nullable=False, unique=True, index=True)
+    content_snapshot_id = Column(Integer, index=True)
+    platform = Column(String(20), default="")
+    content_id = Column(String(128), default="")
+    title = Column(Text, default="")
+    status = Column(String(20), nullable=False, default="pending", index=True)
+    stage = Column(String(64), default="")          # 当前阶段中文文案
+    progress = Column(Float, default=0)
+    asr_provider = Column(String(20), default="")    # local | aliyun
+    asr_segments = Column(JSON, default=list)        # [{start,end,text},...]
+    transcript = Column(Text, default="")            # 拼接纯文本
+    duration_sec = Column(Float, default=0)
+    language = Column(String(16), default="")
+    script_analysis = Column(Text, default="")       # 脚本+拍摄+制作手法（markdown）
+    content_summary = Column(Text, default="")       # 内容总结（markdown）
+    llm_model = Column(String(64), default="")
+    error_message = Column(Text, default="")
+    retry_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=beijing_now)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
