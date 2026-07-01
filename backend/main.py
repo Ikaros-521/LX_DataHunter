@@ -29,6 +29,8 @@ from .api.credentials import router as credentials_router
 from .api.hot import router as hot_router
 from .api.downloads import router as downloads_router
 from .api.download_ws import router as download_ws_router
+from .api.analysis import router as analysis_router
+from .api.analysis_ws import router as analysis_ws_router, broadcast_analysis_progress
 from .config import settings
 from .database import engine
 from .models import Base
@@ -141,10 +143,17 @@ async def lifespan(app: FastAPI):
     await download_engine.start()
     logger.info("Download engine initialized")
 
+    # ---- 启动分析引擎 ----
+    from .engine.analyzer import analysis_engine
+    analysis_engine.set_broadcast(broadcast_analysis_progress)
+    await analysis_engine.start()
+    logger.info("Analysis engine initialized")
+
     yield
 
     # ---- 停止下载引擎 ----
     await download_engine.stop()
+    await analysis_engine.stop()
     stop_scheduler()
     await engine.dispose()
     logger.info("FaPai Spider stopped")
@@ -196,6 +205,8 @@ app.include_router(credentials_router)
 app.include_router(hot_router)
 app.include_router(downloads_router)
 app.include_router(download_ws_router)
+app.include_router(analysis_router)
+app.include_router(analysis_ws_router)
 
 
 @app.get("/api/health")
