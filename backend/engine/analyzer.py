@@ -104,8 +104,9 @@ class AnalysisEngine:
         logger.info(f"Analysis engine started: {worker_count} workers on {loop_type}")
         if loop_type == "SelectorEventLoop":
             logger.warning(
-                "当前事件循环是 SelectorEventLoop，不支持子进程——ffmpeg 抽音频会抛 "
-                "NotImplementedError。Windows 下请用 python run.py 启动（不要加 --reload）。"
+                "当前事件循环是 SelectorEventLoop（通常因 --reload）。分析引擎已改用 "
+                "subprocess.run（不依赖 asyncio 子进程），不受影响；但下载引擎的 yt-dlp "
+                "等异步子进程功能仍会失败，如需用到建议用 python run.py 启动。"
             )
 
     async def stop(self):
@@ -258,22 +259,37 @@ class AnalysisEngine:
     # ---- 辅助 ----
 
     async def _extract_audio(self, video_path: str) -> str:
-        """用 ffmpeg 抽出 16k 单声道 wav。"""
-        # mkstemp（而非已弃用的 mktemp）：与 download_engine 一致，避免竞态
+        """用 ffmpeg 抽出 16k 单声道 wav。
+
+        用标准库 subprocess.run（阻塞）跑在执行器线程里——不依赖 asyncio 子进程
+        支持，因此在 SelectorEventLoop（Windows --reload）下也能工作。
+        """
         fd, out = tempfile.mkstemp(prefix="fapai_audio_", suffix=".wav")
         os.close(fd)  # ffmpeg 会自己写这个文件
-        proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-y", "-i", video_path,
-            "-vn", "-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le",
-            out,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            err = stderr.decode("utf-8", "replace")[-500:]
-            raise RuntimeError(f"ffmpeg 抽音频失败: {err}")
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, AnalysisEngine._ffmpeg_extract_sync, video_path, out
+            )
+        except Exception:
+            try:
+                os.unlink(out)
+            except Exception:
+                pass
+            raise
         return out
+
+    @staticmethod
+    def _ffmpeg_extract_sync(video_path: str, out_path: str) -> None:
+        """阻塞调用 ffmpeg（在执行器线程里跑）。用 subprocess.run，不依赖事件循环。"""
+        import subprocess
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", video_path,
+             "-vn", "-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le", out_path],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            err = result.stderr.decode("utf-8", "replace")[-500:]
+            raise RuntimeError(f"ffmpeg 抽音频失败: {err}")
 
     async def _set_progress(self, db: AsyncSession, a: VideoAnalysis, progress: float):
         a.progress = progress
