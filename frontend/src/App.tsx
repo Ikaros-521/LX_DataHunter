@@ -9,6 +9,8 @@ import CredentialManager from './pages/CredentialManager';
 import ScheduleManager from './pages/ScheduleManager';
 import HotCrawl from './pages/HotCrawl';
 import DownloadManager from './pages/DownloadManager';
+import VideoAnalysisPage from './pages/VideoAnalysis';
+import VideoAnalysisDetail from './pages/VideoAnalysisDetail';
 
 export default function App() {
   return (
@@ -20,6 +22,8 @@ export default function App() {
         <Route path="/crawler" element={<CrawlerConsole />} />
         <Route path="/search" element={<ContentSearch />} />
         <Route path="/downloads" element={<DownloadManager />} />
+        <Route path="/analysis" element={<VideoAnalysisPage />} />
+        <Route path="/analysis/:id" element={<VideoAnalysisDetail />} />
         <Route path="/credentials" element={<CredentialManager />} />
         <Route path="/schedules" element={<ScheduleManager />} />
         <Route path="/hot" element={<HotCrawl />} />

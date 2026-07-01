@@ -270,3 +270,88 @@ export function useCheckYtdlp() {
     staleTime: 60000, // 1 分钟内不重新检查
   });
 }
+
+// ---- Analysis ----
+export interface VideoAnalysis {
+  id: number;
+  download_task_id: number;
+  content_snapshot_id: number;
+  platform: string;
+  content_id: string;
+  title: string;
+  status: 'pending' | 'extracting' | 'transcribing' | 'analyzing' | 'completed' | 'failed';
+  stage: string;
+  progress: number;
+  asr_provider: string;
+  asr_segments: { start: number; end: number; text: string }[];
+  transcript: string;
+  duration_sec: number;
+  language: string;
+  script_analysis: string;
+  content_summary: string;
+  llm_model: string;
+  error_message: string;
+  retry_count: number;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface AnalysisCheck {
+  ffmpeg_available: boolean;
+  ffmpeg_path: string;
+  asr_provider: string;
+  asr_ready: boolean;
+  asr_message: string;
+  llm_ready: boolean;
+  llm_message: string;
+}
+
+export function useAnalysisList(params?: Record<string, any>) {
+  return useQuery({
+    queryKey: ['analysis', params],
+    queryFn: () => client.get('/analysis', { params }).then(r => r.data),
+    refetchInterval: (q: any) => {
+      const items: VideoAnalysis[] = q.state?.data?.items || [];
+      return items.some(t => ['pending', 'extracting', 'transcribing', 'analyzing'].includes(t.status)) ? 3000 : false;
+    },
+  });
+}
+
+export function useAnalysisDetail(id: number | string) {
+  return useQuery({
+    queryKey: ['analysis', 'detail', id],
+    queryFn: () => client.get(`/analysis/${id}`).then(r => r.data as VideoAnalysis),
+    refetchInterval: (q: any) =>
+      ['pending', 'extracting', 'transcribing', 'analyzing'].includes(q.state?.data?.status) ? 2000 : false,
+  });
+}
+
+export function useCreateAnalysis() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (download_task_id: number) => client.post('/analysis', { download_task_id }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['analysis'] }),
+  });
+}
+
+export function useRetryAnalysis() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, force_asr = false }: { id: number; force_asr?: boolean }) =>
+      client.post(`/analysis/${id}/retry`, null, { params: { force_asr } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['analysis'] }),
+  });
+}
+
+export function useDeleteAnalysis() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => client.delete(`/analysis/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['analysis'] }),
+  });
+}
+
+export function useAnalysisCheck() {
+  return useQuery({ queryKey: ['analysis', 'check'], queryFn: () => client.get('/analysis/check').then(r => r.data as AnalysisCheck) });
+}
