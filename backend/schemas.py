@@ -186,3 +186,60 @@ class YtdlpCheckResponse(BaseModel):
     available: bool = False
     version: str = ""
     path: str = ""
+
+
+# ---- Video Analysis ----
+class VideoAnalysisBase(BaseModel):
+    model_config = {"from_attributes": True}
+
+
+class VideoAnalysisResponse(VideoAnalysisBase):
+    id: int
+    download_task_id: int
+    content_snapshot_id: int
+    platform: str
+    content_id: str
+    title: str
+    status: str
+    stage: str
+    progress: float
+    asr_provider: str
+    asr_segments: list[dict]
+    transcript: str
+    duration_sec: float
+    language: str
+    script_analysis: str
+    content_summary: str
+    llm_model: str
+    error_message: str
+    retry_count: int
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class AnalysisListResponse(BaseModel):
+    total: int
+    items: list[VideoAnalysisResponse]
+
+
+class AnalysisCreateRequest(BaseModel):
+    download_task_id: int
+
+
+class AnalysisCheckResponse(BaseModel):
+    ffmpeg_available: bool
+    ffmpeg_path: str
+    asr_provider: str
+    asr_ready: bool
+    asr_message: str
+    llm_ready: bool
+    llm_message: str
+
+
+class AnalysisStatsResponse(BaseModel):
+    total: int
+    pending: int
+    analyzing: int
+    completed: int
+    failed: int
