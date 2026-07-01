@@ -13,6 +13,21 @@ class Settings(BaseSettings):
     max_download_retries: int = 3
     log_level: str = "INFO"
 
+    # ---- 视频分析 ----
+    asr_provider: str = "local"            # local | aliyun
+    whisper_model: str = "large-v3"
+    whisper_device: str = "cuda"
+    whisper_compute_type: str = "auto"
+    aliyun_asr_access_key: str = ""
+    aliyun_asr_secret_key: str = ""
+    aliyun_asr_app_key: str = ""
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = "deepseek-chat"
+    llm_timeout: int = 120
+    max_concurrent_analyses: int = 2
+    max_analysis_retries: int = 3
+
     model_config = {"env_prefix": "FAPAI_", "env_file": ".env"}
 
 
