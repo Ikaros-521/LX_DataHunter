@@ -289,6 +289,8 @@ export interface VideoAnalysis {
   language: string;
   script_analysis: string;
   content_summary: string;
+  knowledge_summary: string;
+  enabled_tasks: string[];
   llm_model: string;
   error_message: string;
   retry_count: number;
@@ -355,10 +357,18 @@ export function useAnalysisDetail(id: number | string) {
   });
 }
 
+// LLM 分析项 key（与后端 AnalysisTask 枚举对齐）
+export type AnalysisTaskKey = 'summary' | 'script' | 'knowledge';
+export const ALL_ANALYSIS_TASKS: AnalysisTaskKey[] = ['summary', 'script', 'knowledge'];
+
 export function useCreateAnalysis() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (download_task_id: number) => client.post('/analysis', { download_task_id }),
+    mutationFn: (args: { download_task_id: number; enabled_tasks?: AnalysisTaskKey[] }) =>
+      client.post('/analysis', {
+        download_task_id: args.download_task_id,
+        enabled_tasks: args.enabled_tasks,
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['analysis'] }),
   });
 }
@@ -366,9 +376,30 @@ export function useCreateAnalysis() {
 export function useBatchCreateAnalysis() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (download_task_ids: number[]) =>
-      client.post('/analysis/batch', { download_task_ids }),
+    mutationFn: (args: { download_task_ids: number[]; enabled_tasks?: AnalysisTaskKey[] }) =>
+      client.post('/analysis/batch', {
+        download_task_ids: args.download_task_ids,
+        enabled_tasks: args.enabled_tasks,
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['analysis'] }),
+  });
+}
+
+// ---- 跨视频"大总结"（不落库，结果用组件 state 承接，无需 invalidate）----
+export interface AnalysisDigestParams {
+  analysis_ids: number[];
+  task: 'summary' | 'knowledge';
+}
+export interface AnalysisDigestResult {
+  digest: string;
+  source_count: number;
+  llm_model: string;
+}
+
+export function useAnalysisDigest() {
+  return useMutation({
+    mutationFn: (params: AnalysisDigestParams) =>
+      client.post<AnalysisDigestResult>('/analysis/digest', params).then(r => r.data),
   });
 }
 

@@ -107,6 +107,31 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Failed to backfill session keywords: {e}")
 
+        # ---- 轻量迁移：为 video_analyses 补加 enabled_tasks / knowledge_summary 列 ----
+        try:
+            await conn.execute(
+                sa_text("""ALTER TABLE video_analyses
+                           ADD COLUMN enabled_tasks JSON DEFAULT '["summary","script","knowledge"]'""")
+            )
+        except Exception:
+            pass  # 列已存在
+        try:
+            await conn.execute(
+                sa_text("ALTER TABLE video_analyses ADD COLUMN knowledge_summary TEXT DEFAULT ''")
+            )
+        except Exception:
+            pass  # 列已存在
+        # 回填历史记录：enabled_tasks 为 NULL 时默认启用全部 LLM 分析项
+        try:
+            await conn.execute(
+                sa_text("""UPDATE video_analyses
+                           SET enabled_tasks = '["summary","script","knowledge"]'
+                           WHERE enabled_tasks IS NULL""")
+            )
+            logger.info("Backfilled enabled_tasks for historical video_analyses")
+        except Exception as e:
+            logger.warning(f"Failed to backfill enabled_tasks: {e}")
+
         # ---- 恢复机制：将上次中断的 running 任务标记为 interrupted ----
         result = await conn.execute(
             select(CrawlSession.id).where(

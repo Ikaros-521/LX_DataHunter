@@ -11,15 +11,18 @@ from backend.config import settings
 from backend.database import get_db
 from backend.models import (
     VideoAnalysis, AnalysisStatus, DownloadTask, DownloadStatus,
+    ALL_ANALYSIS_TASKS,
 )
 from backend.schemas import (
     VideoAnalysisResponse, AnalysisListResponse, AnalysisCreateRequest,
     AnalysisStatsResponse, AnalysisCheckResponse,
     AnalysisCandidateResponse, AnalysisCandidateListResponse,
     AnalysisBatchCreateRequest,
+    AnalysisDigestRequest, AnalysisDigestResponse,
 )
 from backend.engine.analyzer import analysis_engine
 from backend.engine.asr import get_asr_provider
+from backend.engine.llm_client import LlmClient, build_digest_prompt
 
 logger = logging.getLogger("fapai.api.analysis")
 router = APIRouter(prefix="/api/v1/analysis", tags=["analysis"])
@@ -44,6 +47,8 @@ def _to_response(a: VideoAnalysis) -> VideoAnalysisResponse:
         language=a.language or "",
         script_analysis=a.script_analysis or "",
         content_summary=a.content_summary or "",
+        knowledge_summary=a.knowledge_summary or "",
+        enabled_tasks=list(a.enabled_tasks or ALL_ANALYSIS_TASKS),
         llm_model=a.llm_model or "",
         error_message=a.error_message or "",
         retry_count=a.retry_count or 0,
@@ -53,8 +58,11 @@ def _to_response(a: VideoAnalysis) -> VideoAnalysisResponse:
     )
 
 
-def _build_analysis_from_task(dtask: DownloadTask) -> VideoAnalysis:
-    """根据下载任务新建一个 PENDING 分析记录（未 commit）。"""
+def _build_analysis_from_task(dtask: DownloadTask, enabled_tasks: Optional[list[str]] = None) -> VideoAnalysis:
+    """根据下载任务新建一个 PENDING 分析记录（未 commit）。
+
+    enabled_tasks 为 None 时默认启用全部 LLM 分析项。
+    """
     return VideoAnalysis(
         download_task_id=dtask.id,
         content_snapshot_id=dtask.content_snapshot_id or 0,
@@ -62,6 +70,7 @@ def _build_analysis_from_task(dtask: DownloadTask) -> VideoAnalysis:
         content_id=dtask.content_id or "",
         title=dtask.title or "",
         status=AnalysisStatus.PENDING.value,
+        enabled_tasks=list(enabled_tasks) if enabled_tasks else list(ALL_ANALYSIS_TASKS),
     )
 
 
@@ -72,6 +81,7 @@ def _reset_analysis(a: VideoAnalysis) -> None:
     a.retry_count = 0
     a.script_analysis = ""
     a.content_summary = ""
+    a.knowledge_summary = ""
 
 
 # ---- 就绪检测（ffmpeg / ASR / LLM）----
@@ -238,10 +248,13 @@ async def create_analysis(body: AnalysisCreateRequest, db: AsyncSession = Depend
     )
     a = existing.scalar_one_or_none()
     if a is None:
-        a = _build_analysis_from_task(dtask)
+        a = _build_analysis_from_task(dtask, body.enabled_tasks)
         db.add(a)
     else:
         _reset_analysis(a)
+        # 复用时同步更新启用的分析项（可能用户重新勾选了不同的项）
+        if body.enabled_tasks is not None:
+            a.enabled_tasks = list(body.enabled_tasks)
     await db.commit()
     await db.refresh(a)
     await analysis_engine.enqueue(a.id)
@@ -290,11 +303,13 @@ async def batch_create_analysis(body: AnalysisBatchCreateRequest, db: AsyncSessi
             continue
         a = existing_map.get(tid)
         if a is None:
-            a = _build_analysis_from_task(dtask)
+            a = _build_analysis_from_task(dtask, body.enabled_tasks)
             db.add(a)
             created += 1
         else:
             _reset_analysis(a)
+            if body.enabled_tasks is not None:
+                a.enabled_tasks = list(body.enabled_tasks)
             reused += 1
         to_enqueue.append(a)
 
@@ -320,6 +335,65 @@ async def batch_create_analysis(body: AnalysisBatchCreateRequest, db: AsyncSessi
         "skipped": skipped,
         "enqueued": enqueued,
     }
+
+
+# ---- 跨视频"大总结"（不落库，同步生成即返回）----
+# 注意：必须在 /{analysis_id} 之前注册，否则会被路径参数吞掉。
+
+# task 参数到 VideoAnalysis 内容字段的映射
+_DIGEST_FIELD = {
+    "summary": "content_summary",
+    "knowledge": "knowledge_summary",
+}
+
+
+@router.post("/digest", response_model=AnalysisDigestResponse)
+async def create_digest(body: AnalysisDigestRequest, db: AsyncSession = Depends(get_db)):
+    """把多个已完成分析的"单项总结"聚合成一份跨视频大总结。
+
+    - 不落库：结果直接返回，刷新即丢。
+    - 同步调用 LLM（单次 chat），通常 10-30s，由前端 loading 态承接。
+    - 输入用各视频已有的 ``content_summary``（task=summary）或
+      ``knowledge_summary``（task=knowledge），不读原始逐字稿。
+    """
+    if body.task not in _DIGEST_FIELD:
+        raise HTTPException(400, f"不支持的 task: {body.task}（可选 summary / knowledge）")
+
+    # 去重保序
+    ids = list(dict.fromkeys(body.analysis_ids))
+
+    result = await db.execute(
+        select(VideoAnalysis).where(
+            VideoAnalysis.id.in_(ids),
+            VideoAnalysis.status == AnalysisStatus.COMPLETED.value,
+        )
+    )
+    analyses = {a.id: a for a in result.scalars().all()}
+
+    field_name = _DIGEST_FIELD[body.task]
+    items: list[tuple[str, str]] = []
+    for aid in ids:
+        a = analyses.get(aid)
+        if not a:
+            continue
+        text = getattr(a, field_name) or ""
+        text = text.strip()
+        if not text:
+            continue
+        items.append((a.title or "", text))
+
+    if not items:
+        raise HTTPException(400, "没有可聚合的内容（选中分析均未生成该维度的总结）")
+
+    client = LlmClient.from_settings()
+    system, user = build_digest_prompt(items)
+    digest = await client.chat(system, user)
+
+    return AnalysisDigestResponse(
+        digest=digest,
+        source_count=len(items),
+        llm_model=settings.llm_model,
+    )
 
 
 # ---- 任务列表 ----

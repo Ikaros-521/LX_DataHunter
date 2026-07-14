@@ -171,6 +171,21 @@ class AnalysisStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class AnalysisTask(str, enum.Enum):
+    """LLM 分析项 key，用于 VideoAnalysis.enabled_tasks。
+
+    ASR/抽音频是所有 LLM 分析的共同前置，不在此枚举内——这里只描述
+    "转写完成后跑哪些 LLM 总结"。
+    """
+    SUMMARY = "summary"        # 内容总结
+    SCRIPT = "script"          # 脚本与制作手法
+    KNOWLEDGE = "knowledge"    # 视频知识总结（知识点提炼）
+
+
+# 默认启用的全部 LLM 分析项（创建任务时未指定 enabled_tasks 时使用）
+ALL_ANALYSIS_TASKS = [t.value for t in AnalysisTask]
+
+
 class VideoAnalysis(Base):
     """单个已下载视频的分析结果（与 download_task 1:1）。
 
@@ -195,6 +210,8 @@ class VideoAnalysis(Base):
     language = Column(String(16), default="")
     script_analysis = Column(Text, default="")       # 脚本+拍摄+制作手法（markdown）
     content_summary = Column(Text, default="")       # 内容总结（markdown）
+    knowledge_summary = Column(Text, default="")     # 视频知识总结-知识点提炼（markdown）
+    enabled_tasks = Column(JSON, default=lambda: list(ALL_ANALYSIS_TASKS))  # 启用的 LLM 分析项 key 列表
     llm_model = Column(String(64), default="")
     error_message = Column(Text, default="")
     retry_count = Column(Integer, default=0)

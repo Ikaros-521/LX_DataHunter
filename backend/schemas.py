@@ -210,6 +210,8 @@ class VideoAnalysisResponse(VideoAnalysisBase):
     language: str
     script_analysis: str
     content_summary: str
+    knowledge_summary: str = ""
+    enabled_tasks: list[str] = []
     llm_model: str
     error_message: str
     retry_count: int
@@ -225,10 +227,28 @@ class AnalysisListResponse(BaseModel):
 
 class AnalysisCreateRequest(BaseModel):
     download_task_id: int
+    # 启用的 LLM 分析项 key 列表；缺省 None 表示默认启用全部。
+    # 取值：summary / script / knowledge
+    enabled_tasks: Optional[list[str]] = None
 
 
 class AnalysisBatchCreateRequest(BaseModel):
     download_task_ids: list[int] = Field(..., min_length=1, max_length=200, description="下载任务 id 列表")
+    enabled_tasks: Optional[list[str]] = None
+
+
+class AnalysisDigestRequest(BaseModel):
+    """跨视频"大总结"请求。"""
+    analysis_ids: list[int] = Field(..., min_length=2, max_length=50, description="参与聚合的分析任务 id 列表")
+    # 聚合哪个单项总结：summary→content_summary / knowledge→knowledge_summary
+    task: str = Field(default="summary", description="聚合维度：summary | knowledge")
+
+
+class AnalysisDigestResponse(BaseModel):
+    """跨视频"大总结"响应（不落库，仅返回生成结果）。"""
+    digest: str
+    source_count: int        # 实际参与聚合的视频数（去掉空内容后）
+    llm_model: str
 
 
 class AnalysisCheckResponse(BaseModel):

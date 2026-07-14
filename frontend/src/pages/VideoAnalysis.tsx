@@ -2,18 +2,20 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Table, Tag, Button, Space, Progress, Modal, message, Alert, Tooltip,
-  Input, Select, Popconfirm,
+  Input, Select, Popconfirm, Checkbox, Drawer, Tabs, Card, Spin, Typography,
 } from 'antd';
 import {
   ReloadOutlined, DeleteOutlined, PlusOutlined,
   CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined, ClockCircleOutlined,
-  EyeOutlined, ThunderboltOutlined,
+  EyeOutlined, ThunderboltOutlined, CopyOutlined, DownloadOutlined,
 } from '@ant-design/icons';
+import ReactMarkdown from 'react-markdown';
 import dayjs from 'dayjs';
 import {
   useAnalysisList, useAnalysisCheck, useCreateAnalysis,
   useRetryAnalysis, useDeleteAnalysis, useAnalysisCandidates,
-  useBatchCreateAnalysis,
+  useBatchCreateAnalysis, useAnalysisDigest,
+  ALL_ANALYSIS_TASKS, type AnalysisTaskKey,
   type VideoAnalysis, type AnalysisCandidate,
 } from '../api/queries';
 import PlatformTag from '../components/PlatformTag';
@@ -51,6 +53,13 @@ const PLATFORM_OPTIONS = [
   { label: 'B站', value: 'bilibili' },
 ];
 
+// 候选弹窗里"分析项"勾选的展示配置（label + 中文文案）
+const TASK_OPTIONS: { label: string; value: AnalysisTaskKey }[] = [
+  { label: '内容总结', value: 'summary' },
+  { label: '脚本与制作手法', value: 'script' },
+  { label: '视频知识总结', value: 'knowledge' },
+];
+
 export default function VideoAnalysisPage() {
   useAnalysisProgress();
   const navigate = useNavigate();
@@ -63,6 +72,15 @@ export default function VideoAnalysisPage() {
   const [pickerStatus, setPickerStatus] = useState<string>('none');
   const [pickerPage, setPickerPage] = useState(1);
   const [selectedTaskIds, setSelectedTaskIds] = useState<number[]>([]);
+  // 本次创建/批量分析启用的 LLM 分析项（默认全选）
+  const [enabledTasks, setEnabledTasks] = useState<AnalysisTaskKey[]>([...ALL_ANALYSIS_TASKS]);
+
+  // 对比查看：列表主表多选的 analysis id
+  const [compareIds, setCompareIds] = useState<number[]>([]);
+  const [compareOpen, setCompareOpen] = useState(false);
+  // 大总结：聚合维度 + 生成结果（不落库，仅本地 state）
+  const [digestTask, setDigestTask] = useState<'summary' | 'knowledge'>('summary');
+  const [digestText, setDigestText] = useState('');
 
   const { data, isLoading } = useAnalysisList({ page, page_size: 20 });
   const { data: check } = useAnalysisCheck();
@@ -70,6 +88,10 @@ export default function VideoAnalysisPage() {
   const retryMut = useRetryAnalysis();
   const deleteMut = useDeleteAnalysis();
   const batchCreateMut = useBatchCreateAnalysis();
+  const digestMut = useAnalysisDigest();
+
+  // 当前对比 Drawer 要展示的分析记录（从列表数据里取，已含完整字段）
+  const compareItems: VideoAnalysis[] = (data?.items || []).filter(a => compareIds.includes(a.id));
 
   // 候选列表：已下载完成且有本地文件的视频，带分析状态字段
   const { data: candidatesData, isLoading: candidatesLoading } = useAnalysisCandidates({
@@ -84,7 +106,7 @@ export default function VideoAnalysisPage() {
   const resetPickerPage = () => { setPickerPage(1); setSelectedTaskIds([]); };
 
   const handleCreate = (downloadTaskId: number) => {
-    createMut.mutate(downloadTaskId, {
+    createMut.mutate({ download_task_id: downloadTaskId, enabled_tasks: enabledTasks }, {
       onSuccess: (res: any) => {
         message.success('已创建分析任务');
         setPickerOpen(false);
@@ -95,7 +117,7 @@ export default function VideoAnalysisPage() {
 
   const handleBatchCreate = () => {
     if (!selectedTaskIds.length) return;
-    batchCreateMut.mutate(selectedTaskIds, {
+    batchCreateMut.mutate({ download_task_ids: selectedTaskIds, enabled_tasks: enabledTasks }, {
       onSuccess: (res: any) => {
         const d = res?.data || {};
         message.success(d.message || `已入队 ${selectedTaskIds.length} 个分析任务`);
@@ -104,6 +126,50 @@ export default function VideoAnalysisPage() {
         navigate('/analysis');
       },
     });
+  };
+
+  // 打开对比 Drawer：固定当前选中集合，避免列表翻页后 items 取不到
+  const openCompare = () => {
+    if (compareIds.length < 2) {
+      message.warning('请至少选择 2 条已完成的分析');
+      return;
+    }
+    setDigestText('');
+    setCompareOpen(true);
+  };
+
+  // 生成跨视频大总结（不落库，结果存本地 state）
+  const handleDigest = () => {
+    if (compareIds.length < 2) return;
+    digestMut.mutate(
+      { analysis_ids: compareIds, task: digestTask },
+      {
+        onSuccess: (data) => {
+          setDigestText(data.digest);
+          message.success(`已生成大总结（聚合 ${data.source_count} 条）`);
+        },
+        onError: () => message.error('大总结生成失败'),
+      },
+    );
+  };
+
+  const handleCopyDigest = () => {
+    if (!digestText) return;
+    navigator.clipboard.writeText(digestText).then(
+      () => message.success('已复制到剪贴板'),
+      () => message.error('复制失败'),
+    );
+  };
+
+  const handleDownloadDigest = () => {
+    if (!digestText) return;
+    const blob = new Blob([digestText], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `digest_${digestTask}_${Date.now()}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const columns = [
@@ -149,10 +215,23 @@ export default function VideoAnalysisPage() {
 
       <Space style={{ marginBottom: 16 }}>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setPickerOpen(true)}>新建分析</Button>
+        {compareIds.length > 0 && (
+          <Button icon={<EyeOutlined />} onClick={openCompare}>
+            对比查看 {compareIds.length}
+          </Button>
+        )}
         <Tag>视频分析</Tag>
       </Space>
 
       <Table dataSource={data?.items || []} columns={columns} rowKey="id" loading={isLoading} size="small"
+        rowSelection={{
+          selectedRowKeys: compareIds,
+          onChange: (keys) => setCompareIds(keys as number[]),
+          // 仅已完成的分析有总结可对比
+          getCheckboxProps: (r: VideoAnalysis) => ({
+            disabled: r.status !== 'completed',
+          }),
+        }}
         pagination={data?.total ? { current: page, total: data.total, pageSize: 20,
           onChange: p => setPage(p) } : false}
         locale={{ emptyText: '暂无分析任务' }} />
@@ -195,6 +274,19 @@ export default function VideoAnalysisPage() {
             </Popconfirm>
           )}
         </Space>
+        <div style={{ marginBottom: 12 }}>
+          <span style={{ marginRight: 8, color: '#666' }}>分析项：</span>
+          <Checkbox.Group
+            options={TASK_OPTIONS}
+            value={enabledTasks}
+            onChange={(v) => setEnabledTasks(v as AnalysisTaskKey[])}
+          />
+          {enabledTasks.length === 0 && (
+            <span style={{ marginLeft: 8, color: '#ff4d4f', fontSize: 12 }}>
+              至少需勾选一项
+            </span>
+          )}
+        </div>
         <Table
           dataSource={candidatesData?.items || []}
           rowKey="download_task_id"
@@ -261,6 +353,97 @@ export default function VideoAnalysisPage() {
               } },
           ]} />
       </Modal>
+
+      {/* 对比查看 Drawer：并排展示多条已完成分析，并支持生成跨视频大总结 */}
+      <Drawer
+        title={`对比查看（${compareItems.length} 条）`}
+        open={compareOpen}
+        onClose={() => setCompareOpen(false)}
+        width={760}
+        destroyOnClose
+      >
+        {/* 大总结操作区 */}
+        <Card size="small" title="跨视频大总结" style={{ marginBottom: 16 }}>
+          <Space wrap style={{ marginBottom: 8 }}>
+            <Select
+              value={digestTask}
+              onChange={(v) => setDigestTask(v)}
+              style={{ width: 140 }}
+              options={[
+                { label: '基于内容总结', value: 'summary' },
+                { label: '基于知识总结', value: 'knowledge' },
+              ]}
+            />
+            <Button type="primary" icon={<ThunderboltOutlined />}
+              loading={digestMut.isPending}
+              onClick={handleDigest}>
+              生成大总结
+            </Button>
+            {digestText && (
+              <>
+                <Button icon={<CopyOutlined />} onClick={handleCopyDigest}>复制</Button>
+                <Button icon={<DownloadOutlined />} onClick={handleDownloadDigest}>下载</Button>
+              </>
+            )}
+          </Space>
+          {digestMut.isPending ? (
+            <div style={{ textAlign: 'center', padding: 24 }}>
+              <Spin tip="正在调用 LLM 生成大总结，请稍候（通常 10-30 秒）…" />
+            </div>
+          ) : digestText ? (
+            <Typography>
+              <ReactMarkdown>{digestText}</ReactMarkdown>
+            </Typography>
+          ) : (
+            <div style={{ color: '#999', fontSize: 12 }}>
+              选择聚合维度后点"生成大总结"，把多条视频的已有总结整合成一份综合报告（不保存，刷新即丢）。
+            </div>
+          )}
+        </Card>
+
+        {/* 视频卡片纵列：每条分析一张卡片，卡片内 Tab 切换分析项 */}
+        {compareItems.map((a) => {
+          const tabs = [
+            ...(a.enabled_tasks?.includes('summary') ? [{
+              key: 'summary', label: '内容总结',
+              children: <ReactMarkdown>{a.content_summary || '（空）'}</ReactMarkdown>,
+            }] : []),
+            ...(a.enabled_tasks?.includes('script') ? [{
+              key: 'script', label: '脚本与制作手法',
+              children: <ReactMarkdown>{a.script_analysis || '（空）'}</ReactMarkdown>,
+            }] : []),
+            ...(a.enabled_tasks?.includes('knowledge') ? [{
+              key: 'knowledge', label: '视频知识总结',
+              children: <ReactMarkdown>{a.knowledge_summary || '（空）'}</ReactMarkdown>,
+            }] : []),
+          ];
+          return (
+            <Card
+              key={a.id}
+              size="small"
+              style={{ marginBottom: 12 }}
+              title={
+                <Space size="small">
+                  <span style={{ fontWeight: 500 }}>{a.title || '(无标题)'}</span>
+                  <PlatformTag platform={a.platform} />
+                </Space>
+              }
+              extra={
+                <Button size="small" type="link" icon={<EyeOutlined />}
+                  onClick={() => { setCompareOpen(false); navigate(`/analysis/${a.id}`); }}>
+                  详情
+                </Button>
+              }
+            >
+              {tabs.length > 0 ? (
+                <Tabs size="small" items={tabs} />
+              ) : (
+                <span style={{ color: '#999' }}>（无已生成的分析项）</span>
+              )}
+            </Card>
+          );
+        })}
+      </Drawer>
     </div>
   );
 }

@@ -17,12 +17,13 @@ from backend.config import settings
 from backend.database import AsyncSessionLocal
 from backend.models import (
     VideoAnalysis, AnalysisStatus, DownloadTask, DownloadStatus, beijing_now,
+    ALL_ANALYSIS_TASKS,
 )
 from backend.engine.asr import (
     get_asr_provider, segments_to_transcript, segments_to_dicts, AsrProvider,
 )
 from backend.engine.llm_client import (
-    LlmClient, build_script_prompt, build_summary_prompt,
+    LlmClient, build_script_prompt, build_summary_prompt, build_knowledge_prompt,
 )
 
 logger = logging.getLogger("fapai.analyzer")
@@ -209,21 +210,38 @@ class AnalysisEngine:
                     await self._fail(db, a, "语音识别结果为空（可能是无语音视频）")
                     return
 
-                # 3. LLM 分析（两类并发）
+                # 3. LLM 分析（按 enabled_tasks 动态并发）
                 a.status = AnalysisStatus.ANALYZING.value
                 a.stage = "大模型分析"
                 await db.commit()
                 await self._broadcast_progress(a)
 
+                tasks_enabled = a.enabled_tasks or ALL_ANALYSIS_TASKS
                 client = LlmClient.from_settings()
-                s_sys, s_user = build_script_prompt(a.transcript)
-                m_sys, m_user = build_summary_prompt(a.transcript)
-                script, summary = await asyncio.gather(
-                    client.chat(s_sys, s_user),
-                    client.chat(m_sys, m_user),
-                )
-                a.script_analysis = script
-                a.content_summary = summary
+                # 构造 [(key, awaitable)]，只跑勾选的 LLM 分析项
+                llm_jobs: list[tuple[str, Any]] = []
+                if "summary" in tasks_enabled:
+                    s_sys, s_user = build_summary_prompt(a.transcript)
+                    llm_jobs.append(("summary", client.chat(s_sys, s_user)))
+                if "script" in tasks_enabled:
+                    p_sys, p_user = build_script_prompt(a.transcript)
+                    llm_jobs.append(("script", client.chat(p_sys, p_user)))
+                if "knowledge" in tasks_enabled:
+                    k_sys, k_user = build_knowledge_prompt(a.transcript)
+                    llm_jobs.append(("knowledge", client.chat(k_sys, k_user)))
+
+                if not llm_jobs:
+                    await self._fail(db, a, "未勾选任何 LLM 分析项（enabled_tasks 为空）")
+                    return
+
+                results = await asyncio.gather(*[job for _, job in llm_jobs])
+                for (key, _), text in zip(llm_jobs, results):
+                    if key == "summary":
+                        a.content_summary = text
+                    elif key == "script":
+                        a.script_analysis = text
+                    elif key == "knowledge":
+                        a.knowledge_summary = text
                 a.llm_model = settings.llm_model
 
                 a.status = AnalysisStatus.COMPLETED.value

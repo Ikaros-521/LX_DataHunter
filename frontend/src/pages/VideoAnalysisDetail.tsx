@@ -57,27 +57,40 @@ export default function VideoAnalysisDetail() {
       {inProgress ? (
         <Alert type="info" showIcon message={`分析进行中：${a.stage || a.status}`} description={<Progress percent={Math.round(a.progress)} />} />
       ) : (
-        <Tabs defaultActiveKey="summary" items={[
-          { key: 'summary', label: '内容总结', children: <ReactMarkdown>{a.content_summary || '（空）'}</ReactMarkdown> },
-          { key: 'script', label: '脚本与制作手法', children: <ReactMarkdown>{a.script_analysis || '（空）'}</ReactMarkdown> },
-          { key: 'transcript', label: `逐字稿 (${a.asr_segments.length})`, children: (
-            <div>
-              <video ref={videoRef} controls
-                src={`/api/v1/downloads/${a.download_task_id}/file`}
-                style={{ maxWidth: 480, width: '100%', marginBottom: 16, background: '#000' }} />
-              <div style={{ maxHeight: '60vh', overflow: 'auto', fontFamily: 'monospace' }}>
-                {a.asr_segments.map((seg, i) => (
-                  <div key={i} style={{ padding: '4px 0', cursor: 'pointer', borderBottom: '1px solid #f0f0f0' }}
-                    onClick={() => seek(seg.start)}>
-                    <span style={{ color: '#1677ff', marginRight: 8 }}>[{fmt(seg.start)}]</span>
-                    {seg.text}
-                  </div>
-                ))}
-                {a.asr_segments.length === 0 && <div>（无逐字稿）</div>}
+        <Tabs
+          defaultActiveKey={(a.enabled_tasks && a.enabled_tasks[0]) || 'summary'}
+          items={[
+            ...(a.enabled_tasks?.includes('summary') ? [{
+              key: 'summary', label: '内容总结',
+              children: <ReactMarkdown>{a.content_summary || '（空）'}</ReactMarkdown>,
+            }] : []),
+            ...(a.enabled_tasks?.includes('script') ? [{
+              key: 'script', label: '脚本与制作手法',
+              children: <ReactMarkdown>{a.script_analysis || '（空）'}</ReactMarkdown>,
+            }] : []),
+            ...(a.enabled_tasks?.includes('knowledge') ? [{
+              key: 'knowledge', label: '视频知识总结',
+              children: <ReactMarkdown>{a.knowledge_summary || '（空）'}</ReactMarkdown>,
+            }] : []),
+            { key: 'transcript', label: `逐字稿 (${a.asr_segments.length})`, children: (
+              <div>
+                <video ref={videoRef} controls
+                  src={`/api/v1/downloads/${a.download_task_id}/file`}
+                  style={{ maxWidth: 480, width: '100%', marginBottom: 16, background: '#000' }} />
+                <div style={{ maxHeight: '60vh', overflow: 'auto', fontFamily: 'monospace' }}>
+                  {a.asr_segments.map((seg, i) => (
+                    <div key={i} style={{ padding: '4px 0', cursor: 'pointer', borderBottom: '1px solid #f0f0f0' }}
+                      onClick={() => seek(seg.start)}>
+                      <span style={{ color: '#1677ff', marginRight: 8 }}>[{fmt(seg.start)}]</span>
+                      {seg.text}
+                    </div>
+                  ))}
+                  {a.asr_segments.length === 0 && <div>（无逐字稿）</div>}
+                </div>
               </div>
-            </div>
-          ) },
-        ]} />
+            ) },
+          ]}
+        />
       )}
     </div>
   );
