@@ -15,6 +15,8 @@ from backend.models import (
 from backend.schemas import (
     VideoAnalysisResponse, AnalysisListResponse, AnalysisCreateRequest,
     AnalysisStatsResponse, AnalysisCheckResponse,
+    AnalysisCandidateResponse, AnalysisCandidateListResponse,
+    AnalysisBatchCreateRequest,
 )
 from backend.engine.analyzer import analysis_engine
 from backend.engine.asr import get_asr_provider
@@ -51,6 +53,27 @@ def _to_response(a: VideoAnalysis) -> VideoAnalysisResponse:
     )
 
 
+def _build_analysis_from_task(dtask: DownloadTask) -> VideoAnalysis:
+    """根据下载任务新建一个 PENDING 分析记录（未 commit）。"""
+    return VideoAnalysis(
+        download_task_id=dtask.id,
+        content_snapshot_id=dtask.content_snapshot_id or 0,
+        platform=dtask.platform or "",
+        content_id=dtask.content_id or "",
+        title=dtask.title or "",
+        status=AnalysisStatus.PENDING.value,
+    )
+
+
+def _reset_analysis(a: VideoAnalysis) -> None:
+    """复用已存在的分析记录：清空旧结果后重置为 PENDING（未 commit）。"""
+    a.status = AnalysisStatus.PENDING.value
+    a.error_message = ""
+    a.retry_count = 0
+    a.script_analysis = ""
+    a.content_summary = ""
+
+
 # ---- 就绪检测（ffmpeg / ASR / LLM）----
 # 注意：/check、/stats 等静态路径必须注册在 /{analysis_id} 之前，避免被路径参数吞掉。
 
@@ -83,6 +106,120 @@ async def check_analysis():
     )
 
 
+# ---- 可分析视频候选列表 ----
+# 注意：必须在 /{analysis_id} 之前注册，否则会被路径参数吞掉。
+
+# 分析中聚合态对应的底层状态
+_ANALYZING_STATUSES = [
+    AnalysisStatus.PENDING.value,
+    AnalysisStatus.EXTRACTING.value,
+    AnalysisStatus.TRANSCRIBING.value,
+    AnalysisStatus.ANALYZING.value,
+]
+
+
+@router.get("/candidates", response_model=AnalysisCandidateListResponse)
+async def list_analysis_candidates(
+    search: Optional[str] = None,
+    platform: Optional[str] = None,
+    analysis_status: str = "none",
+    page: int = 1,
+    page_size: int = 20,
+    db: AsyncSession = Depends(get_db),
+):
+    """列出"可分析视频"候选，支持按标题搜索、平台/分析状态筛选与分页。
+
+    数据源：已下载完成且有本地文件的 DownloadTask，LEFT JOIN VideoAnalysis。
+    每条返回 analysis_id / analysis_status / analysis_progress，便于前端
+    直接判断"这个视频分析过没有"。
+
+    - ``search``：标题 LIKE 模糊匹配。
+    - ``analysis_status``：none(默认,仅未分析) | pending | analyzing |
+      completed | failed | all。
+    """
+    # 构造带 LEFT JOIN 的基础查询
+    base = (
+        select(
+            DownloadTask.id,
+            DownloadTask.content_snapshot_id,
+            DownloadTask.platform,
+            DownloadTask.content_id,
+            DownloadTask.title,
+            DownloadTask.file_size,
+            DownloadTask.created_at,
+            VideoAnalysis.id.label("va_id"),
+            VideoAnalysis.status.label("va_status"),
+            VideoAnalysis.progress.label("va_progress"),
+        )
+        .outerjoin(VideoAnalysis, VideoAnalysis.download_task_id == DownloadTask.id)
+        .where(
+            DownloadTask.status == DownloadStatus.COMPLETED.value,
+            DownloadTask.file_path.isnot(None),
+            DownloadTask.file_path != "",
+        )
+    )
+
+    if search:
+        base = base.where(DownloadTask.title.like(f"%{search}%"))
+    if platform:
+        base = base.where(DownloadTask.platform == platform)
+
+    status_filter = (analysis_status or "none").lower()
+    if status_filter == "none":
+        # 仅未分析：JOIN 右侧为空
+        base = base.where(VideoAnalysis.id.is_(None))
+    elif status_filter == "analyzing":
+        base = base.where(VideoAnalysis.status.in_(_ANALYZING_STATUSES))
+    elif status_filter in {
+        AnalysisStatus.PENDING.value,
+        AnalysisStatus.COMPLETED.value,
+        AnalysisStatus.FAILED.value,
+    }:
+        base = base.where(VideoAnalysis.status == status_filter)
+    elif status_filter == "extracting":
+        base = base.where(VideoAnalysis.status == AnalysisStatus.EXTRACTING.value)
+    elif status_filter == "transcribing":
+        base = base.where(VideoAnalysis.status == AnalysisStatus.TRANSCRIBING.value)
+    # status_filter == "all"：不加分析状态条件
+
+    base = base.order_by(DownloadTask.id.desc())
+
+    # 总数
+    total = (await db.execute(
+        select(func.count()).select_from(base.subquery())
+    )).scalar() or 0
+
+    # 分页
+    rows = (await db.execute(
+        base.offset((page - 1) * page_size).limit(page_size)
+    )).all()
+
+    def _agg_status(s: Optional[str]) -> str:
+        """把底层分析状态聚合到候选展示态。"""
+        if s is None:
+            return "none"
+        if s in _ANALYZING_STATUSES:
+            return "analyzing"
+        return s  # completed / failed 原样返回
+
+    items = [
+        AnalysisCandidateResponse(
+            download_task_id=r.id,
+            content_snapshot_id=r.content_snapshot_id or 0,
+            platform=r.platform or "",
+            content_id=r.content_id or "",
+            title=r.title or "",
+            file_size=r.file_size or 0,
+            created_at=r.created_at,
+            analysis_id=r.va_id,
+            analysis_status=_agg_status(r.va_status),
+            analysis_progress=r.va_progress or 0,
+        )
+        for r in rows
+    ]
+    return AnalysisCandidateListResponse(total=total, items=items)
+
+
 # ---- 创建分析任务（按下载任务）----
 
 @router.post("", response_model=VideoAnalysisResponse, status_code=202)
@@ -101,26 +238,88 @@ async def create_analysis(body: AnalysisCreateRequest, db: AsyncSession = Depend
     )
     a = existing.scalar_one_or_none()
     if a is None:
-        a = VideoAnalysis(
-            download_task_id=dtask.id,
-            content_snapshot_id=dtask.content_snapshot_id or 0,
-            platform=dtask.platform or "",
-            content_id=dtask.content_id or "",
-            title=dtask.title or "",
-            status=AnalysisStatus.PENDING.value,
-        )
+        a = _build_analysis_from_task(dtask)
         db.add(a)
     else:
-        # 复用已存在的记录：清空旧结果后重置为 PENDING
-        a.status = AnalysisStatus.PENDING.value
-        a.error_message = ""
-        a.retry_count = 0
-        a.script_analysis = ""
-        a.content_summary = ""
+        _reset_analysis(a)
     await db.commit()
     await db.refresh(a)
     await analysis_engine.enqueue(a.id)
     return _to_response(a)
+
+
+# ---- 批量创建分析任务（按下载任务）----
+
+@router.post("/batch", status_code=202)
+async def batch_create_analysis(body: AnalysisBatchCreateRequest, db: AsyncSession = Depends(get_db)):
+    """批量创建分析任务并统一入队。
+
+    单次事务内逐个处理：校验下载已完成且有本地文件、已存在则复用并重置为
+    PENDING、否则新建。事务提交后按 id 顺序逐个入队，由 ``analysis_engine``
+    按并发限制自动排队执行。
+    """
+    # 去重，保持入参顺序
+    ids = list(dict.fromkeys(body.download_task_ids))
+
+    # 一次性取所有相关下载任务
+    tasks_result = await db.execute(
+        select(DownloadTask).where(DownloadTask.id.in_(ids))
+    )
+    task_map: dict[int, DownloadTask] = {t.id: t for t in tasks_result.scalars().all()}
+
+    # 一次性取已存在的分析记录
+    existing_result = await db.execute(
+        select(VideoAnalysis).where(VideoAnalysis.download_task_id.in_(ids))
+    )
+    existing_map: dict[int, VideoAnalysis] = {
+        a.download_task_id: a for a in existing_result.scalars().all()
+    }
+
+    created = 0       # 新建的分析数
+    reused = 0        # 复用并重置的分析数
+    skipped = 0       # 跳过（下载不存在/未完成/无文件）
+    to_enqueue: list[VideoAnalysis] = []
+
+    for tid in ids:
+        dtask = task_map.get(tid)
+        if not dtask:
+            skipped += 1
+            continue
+        if dtask.status != DownloadStatus.COMPLETED.value or not dtask.file_path:
+            skipped += 1
+            continue
+        a = existing_map.get(tid)
+        if a is None:
+            a = _build_analysis_from_task(dtask)
+            db.add(a)
+            created += 1
+        else:
+            _reset_analysis(a)
+            reused += 1
+        to_enqueue.append(a)
+
+    if not to_enqueue:
+        # 没有可处理的任务时给出明确提示，而不是默默返回 0
+        raise HTTPException(400, "没有可分析的视频（未找到已完成且有本地文件的下载）")
+
+    await db.commit()
+    # 统一入队（refresh 拿到最终 id，包括新建对象）
+    enqueued = 0
+    for a in to_enqueue:
+        await db.refresh(a)
+        await analysis_engine.enqueue(a.id)
+        enqueued += 1
+
+    logger.info(
+        f"Batch analysis: created={created}, reused={reused}, skipped={skipped}, enqueued={enqueued}"
+    )
+    return {
+        "message": f"已入队 {enqueued} 个分析任务（新建 {created}，复用 {reused}，跳过 {skipped}）",
+        "created": created,
+        "reused": reused,
+        "skipped": skipped,
+        "enqueued": enqueued,
+    }
 
 
 # ---- 任务列表 ----

@@ -227,6 +227,10 @@ class AnalysisCreateRequest(BaseModel):
     download_task_id: int
 
 
+class AnalysisBatchCreateRequest(BaseModel):
+    download_task_ids: list[int] = Field(..., min_length=1, max_length=200, description="下载任务 id 列表")
+
+
 class AnalysisCheckResponse(BaseModel):
     ffmpeg_available: bool
     ffmpeg_path: str
@@ -243,3 +247,26 @@ class AnalysisStatsResponse(BaseModel):
     analyzing: int
     completed: int
     failed: int
+
+
+# ---- Analysis Candidates（"选择要分析的视频"专用列表）----
+# analysis_status 取值：none(未分析) | pending | analyzing | completed | failed
+# 其中 "analyzing" 为前端聚合态，对应后端 pending/extracting/transcribing/analyzing 任意一种。
+class AnalysisCandidateResponse(BaseModel):
+    download_task_id: int
+    content_snapshot_id: int
+    platform: str
+    content_id: str
+    title: str
+    file_size: int = 0
+    created_at: datetime | None = None
+    analysis_id: int | None = None          # 无分析记录时为 None
+    analysis_status: str = "none"           # "none"|"pending"|"analyzing"|"completed"|"failed"
+    analysis_progress: float = 0
+
+    model_config = {"from_attributes": True}
+
+
+class AnalysisCandidateListResponse(BaseModel):
+    total: int
+    items: list[AnalysisCandidateResponse]

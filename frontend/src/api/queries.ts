@@ -318,6 +318,34 @@ export function useAnalysisList(params?: Record<string, any>) {
   });
 }
 
+// ---- Analysis Candidates（"选择要分析的视频"候选列表）----
+// analysis_status: 'none' | 'pending' | 'analyzing' | 'completed' | 'failed'
+// 其中 'none' 表示该视频从未被分析过。
+export interface AnalysisCandidate {
+  download_task_id: number;
+  content_snapshot_id: number;
+  platform: string;
+  content_id: string;
+  title: string;
+  file_size: number;
+  created_at: string | null;
+  analysis_id: number | null;
+  analysis_status: 'none' | 'pending' | 'analyzing' | 'completed' | 'failed';
+  analysis_progress: number;
+}
+
+export function useAnalysisCandidates(params?: Record<string, any>) {
+  return useQuery<PaginatedResponse<AnalysisCandidate>>({
+    queryKey: ['analysis', 'candidates', params],
+    queryFn: () => client.get('/analysis/candidates', { params }).then(r => r.data),
+    refetchInterval: (q: any) => {
+      const items: AnalysisCandidate[] = q.state?.data?.items || [];
+      // 列表中存在分析中的视频时，3s 轮询刷新进度
+      return items.some(t => t.analysis_status === 'analyzing') ? 3000 : false;
+    },
+  });
+}
+
 export function useAnalysisDetail(id: number | string) {
   return useQuery({
     queryKey: ['analysis', 'detail', id],
@@ -331,6 +359,15 @@ export function useCreateAnalysis() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (download_task_id: number) => client.post('/analysis', { download_task_id }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['analysis'] }),
+  });
+}
+
+export function useBatchCreateAnalysis() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (download_task_ids: number[]) =>
+      client.post('/analysis/batch', { download_task_ids }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['analysis'] }),
   });
 }
