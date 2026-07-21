@@ -6,7 +6,7 @@ from typing import Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-logger = logging.getLogger("fapai.api.download_ws")
+logger = logging.getLogger("lx_datahunter.api.download_ws")
 router = APIRouter()
 
 # 活跃连接注册表

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-logger = logging.getLogger("fapai.schedules")
+logger = logging.getLogger("lx_datahunter.schedules")
 from backend.database import get_db
 from backend.models import ScheduleConfig, MonitoredCreator, beijing_now
 from backend.schemas import ScheduleUpsert, ScheduleResponse

@@ -12,7 +12,7 @@ from .base import (
     BasePlatformAdapter, ContentItem, CreatorInfo, ProgressCallback,
 )
 
-logger = logging.getLogger("fapai.adapter.bilibili")
+logger = logging.getLogger("lx_datahunter.adapter.bilibili")
 
 
 def _make_credential(cookie_str: str | None) -> Credential | None:

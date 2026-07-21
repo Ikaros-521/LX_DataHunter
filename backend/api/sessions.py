@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func, delete
 from backend.database import get_db
 
-logger = logging.getLogger("fapai.sessions")
+logger = logging.getLogger("lx_datahunter.sessions")
 from backend.models import CrawlSession, MonitoredCreator, ContentSnapshot
 from backend.schemas import SessionResponse, SessionListResponse, BatchDeleteRequest
 

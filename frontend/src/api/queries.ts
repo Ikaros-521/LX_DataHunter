@@ -403,6 +403,38 @@ export function useAnalysisDigest() {
   });
 }
 
+// ---- 对总结内容多轮对话（不落库，上下文由前端维护）----
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+export interface AnalysisChatParams {
+  analysis_ids: number[];
+  task: 'summary' | 'knowledge';
+  messages: ChatMessage[];
+}
+export interface AnalysisChatResult {
+  answer: string;
+  llm_model: string;
+}
+
+export function useAnalysisChat() {
+  return useMutation({
+    mutationFn: (params: AnalysisChatParams) =>
+      client.post<AnalysisChatResult>('/analysis/chat', params).then(r => r.data),
+  });
+}
+
+// ---- 批量取分析详情（对比页跨页取数）----
+export function useAnalysisBatchDetail(ids: number[]) {
+  return useQuery<PaginatedResponse<VideoAnalysis>>({
+    queryKey: ['analysis', 'batch', ids],
+    queryFn: () =>
+      client.post('/analysis/batch-detail', { analysis_ids: ids }).then(r => r.data),
+    enabled: ids.length > 0,
+  });
+}
+
 export function useRetryAnalysis() {
   const qc = useQueryClient();
   return useMutation({

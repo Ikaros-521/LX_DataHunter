@@ -22,7 +22,7 @@ from backend.schemas import (
 )
 from backend.engine.downloader import download_engine
 
-logger = logging.getLogger("fapai.api.downloads")
+logger = logging.getLogger("lx_datahunter.api.downloads")
 router = APIRouter(prefix="/api/v1/downloads", tags=["downloads"])
 
 

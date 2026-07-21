@@ -10,7 +10,7 @@ from .base import (
     BasePlatformAdapter, ContentItem, CreatorInfo, ProgressCallback,
 )
 
-logger = logging.getLogger("fapai.adapter.douyin")
+logger = logging.getLogger("lx_datahunter.adapter.douyin")
 
 CHROME_PATHS = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",

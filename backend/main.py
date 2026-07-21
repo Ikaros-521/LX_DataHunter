@@ -46,7 +46,7 @@ logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.error").setLevel(logging.INFO)
 logging.getLogger("scrapling").setLevel(logging.WARNING)
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
-logger = logging.getLogger("fapai")
+logger = logging.getLogger("lx_datahunter")
 
 
 @asynccontextmanager
@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI):
     from .models import CrawlSession, SessionStatus
     from sqlalchemy import select, text as sa_text, update as sa_update
 
-    logger.info("Starting FaPai Spider...")
+    logger.info("Starting LX_DataHunter...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -181,10 +181,10 @@ async def lifespan(app: FastAPI):
     await analysis_engine.stop()
     stop_scheduler()
     await engine.dispose()
-    logger.info("FaPai Spider stopped")
+    logger.info("LX_DataHunter stopped")
 
 
-app = FastAPI(title="FaPai Spider", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="LX_DataHunter", version="0.1.0", lifespan=lifespan)
 
 # ---- Request logging middleware (仅记录 4xx/5xx，忽略正常请求) ----
 @app.middleware("http")

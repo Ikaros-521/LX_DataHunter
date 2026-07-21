@@ -1,4 +1,4 @@
-# FaPai Spider
+# LX_DataHunter
 
 Multi-platform creator content monitor and crawler. 多渠道创作者内容爬取与监控系统。
 

@@ -29,7 +29,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <Sider breakpoint="lg" collapsedWidth="0">
         <div style={{ height: 32, margin: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Typography.Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>
-            FaPai Spider
+            LX_DataHunter
           </Typography.Text>
         </div>
         <Menu

@@ -28,7 +28,7 @@ if sys.platform == "win32":
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="启动 FaPai Spider 后端")
+    parser = argparse.ArgumentParser(description="启动 LX_DataHunter 后端")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=28000)
     parser.add_argument(

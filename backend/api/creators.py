@@ -11,7 +11,7 @@ from backend.schemas import (
 )
 from backend.engine.crawler import crawl_creator
 
-logger = logging.getLogger("fapai.creators")
+logger = logging.getLogger("lx_datahunter.creators")
 router = APIRouter(prefix="/api/v1/creators", tags=["creators"])
 
 async def _to_response(creator: MonitoredCreator, db: AsyncSession) -> dict:

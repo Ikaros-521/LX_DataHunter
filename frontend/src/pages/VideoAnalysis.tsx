@@ -2,19 +2,18 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Table, Tag, Button, Space, Progress, Modal, message, Alert, Tooltip,
-  Input, Select, Popconfirm, Checkbox, Drawer, Tabs, Card, Spin, Typography,
+  Input, Select, Popconfirm, Checkbox,
 } from 'antd';
 import {
   ReloadOutlined, DeleteOutlined, PlusOutlined,
   CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined, ClockCircleOutlined,
-  EyeOutlined, ThunderboltOutlined, CopyOutlined, DownloadOutlined,
+  EyeOutlined, ThunderboltOutlined,
 } from '@ant-design/icons';
-import ReactMarkdown from 'react-markdown';
 import dayjs from 'dayjs';
 import {
   useAnalysisList, useAnalysisCheck, useCreateAnalysis,
   useRetryAnalysis, useDeleteAnalysis, useAnalysisCandidates,
-  useBatchCreateAnalysis, useAnalysisDigest,
+  useBatchCreateAnalysis,
   ALL_ANALYSIS_TASKS, type AnalysisTaskKey,
   type VideoAnalysis, type AnalysisCandidate,
 } from '../api/queries';
@@ -75,12 +74,8 @@ export default function VideoAnalysisPage() {
   // 本次创建/批量分析启用的 LLM 分析项（默认全选）
   const [enabledTasks, setEnabledTasks] = useState<AnalysisTaskKey[]>([...ALL_ANALYSIS_TASKS]);
 
-  // 对比查看：列表主表多选的 analysis id
+  // 对比查看：列表主表多选的 analysis id（跳转到对比独立页）
   const [compareIds, setCompareIds] = useState<number[]>([]);
-  const [compareOpen, setCompareOpen] = useState(false);
-  // 大总结：聚合维度 + 生成结果（不落库，仅本地 state）
-  const [digestTask, setDigestTask] = useState<'summary' | 'knowledge'>('summary');
-  const [digestText, setDigestText] = useState('');
 
   const { data, isLoading } = useAnalysisList({ page, page_size: 20 });
   const { data: check } = useAnalysisCheck();
@@ -88,10 +83,6 @@ export default function VideoAnalysisPage() {
   const retryMut = useRetryAnalysis();
   const deleteMut = useDeleteAnalysis();
   const batchCreateMut = useBatchCreateAnalysis();
-  const digestMut = useAnalysisDigest();
-
-  // 当前对比 Drawer 要展示的分析记录（从列表数据里取，已含完整字段）
-  const compareItems: VideoAnalysis[] = (data?.items || []).filter(a => compareIds.includes(a.id));
 
   // 候选列表：已下载完成且有本地文件的视频，带分析状态字段
   const { data: candidatesData, isLoading: candidatesLoading } = useAnalysisCandidates({
@@ -128,48 +119,13 @@ export default function VideoAnalysisPage() {
     });
   };
 
-  // 打开对比 Drawer：固定当前选中集合，避免列表翻页后 items 取不到
+  // 打开对比独立页：把选中的 analysis id 通过 URL 传递，对比页用 batch-detail 取数
   const openCompare = () => {
     if (compareIds.length < 2) {
       message.warning('请至少选择 2 条已完成的分析');
       return;
     }
-    setDigestText('');
-    setCompareOpen(true);
-  };
-
-  // 生成跨视频大总结（不落库，结果存本地 state）
-  const handleDigest = () => {
-    if (compareIds.length < 2) return;
-    digestMut.mutate(
-      { analysis_ids: compareIds, task: digestTask },
-      {
-        onSuccess: (data) => {
-          setDigestText(data.digest);
-          message.success(`已生成大总结（聚合 ${data.source_count} 条）`);
-        },
-        onError: () => message.error('大总结生成失败'),
-      },
-    );
-  };
-
-  const handleCopyDigest = () => {
-    if (!digestText) return;
-    navigator.clipboard.writeText(digestText).then(
-      () => message.success('已复制到剪贴板'),
-      () => message.error('复制失败'),
-    );
-  };
-
-  const handleDownloadDigest = () => {
-    if (!digestText) return;
-    const blob = new Blob([digestText], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `digest_${digestTask}_${Date.now()}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
+    navigate(`/analysis/compare?ids=${compareIds.join(',')}`);
   };
 
   const columns = [
@@ -353,97 +309,6 @@ export default function VideoAnalysisPage() {
               } },
           ]} />
       </Modal>
-
-      {/* 对比查看 Drawer：并排展示多条已完成分析，并支持生成跨视频大总结 */}
-      <Drawer
-        title={`对比查看（${compareItems.length} 条）`}
-        open={compareOpen}
-        onClose={() => setCompareOpen(false)}
-        width={760}
-        destroyOnClose
-      >
-        {/* 大总结操作区 */}
-        <Card size="small" title="跨视频大总结" style={{ marginBottom: 16 }}>
-          <Space wrap style={{ marginBottom: 8 }}>
-            <Select
-              value={digestTask}
-              onChange={(v) => setDigestTask(v)}
-              style={{ width: 140 }}
-              options={[
-                { label: '基于内容总结', value: 'summary' },
-                { label: '基于知识总结', value: 'knowledge' },
-              ]}
-            />
-            <Button type="primary" icon={<ThunderboltOutlined />}
-              loading={digestMut.isPending}
-              onClick={handleDigest}>
-              生成大总结
-            </Button>
-            {digestText && (
-              <>
-                <Button icon={<CopyOutlined />} onClick={handleCopyDigest}>复制</Button>
-                <Button icon={<DownloadOutlined />} onClick={handleDownloadDigest}>下载</Button>
-              </>
-            )}
-          </Space>
-          {digestMut.isPending ? (
-            <div style={{ textAlign: 'center', padding: 24 }}>
-              <Spin tip="正在调用 LLM 生成大总结，请稍候（通常 10-30 秒）…" />
-            </div>
-          ) : digestText ? (
-            <Typography>
-              <ReactMarkdown>{digestText}</ReactMarkdown>
-            </Typography>
-          ) : (
-            <div style={{ color: '#999', fontSize: 12 }}>
-              选择聚合维度后点"生成大总结"，把多条视频的已有总结整合成一份综合报告（不保存，刷新即丢）。
-            </div>
-          )}
-        </Card>
-
-        {/* 视频卡片纵列：每条分析一张卡片，卡片内 Tab 切换分析项 */}
-        {compareItems.map((a) => {
-          const tabs = [
-            ...(a.enabled_tasks?.includes('summary') ? [{
-              key: 'summary', label: '内容总结',
-              children: <ReactMarkdown>{a.content_summary || '（空）'}</ReactMarkdown>,
-            }] : []),
-            ...(a.enabled_tasks?.includes('script') ? [{
-              key: 'script', label: '脚本与制作手法',
-              children: <ReactMarkdown>{a.script_analysis || '（空）'}</ReactMarkdown>,
-            }] : []),
-            ...(a.enabled_tasks?.includes('knowledge') ? [{
-              key: 'knowledge', label: '视频知识总结',
-              children: <ReactMarkdown>{a.knowledge_summary || '（空）'}</ReactMarkdown>,
-            }] : []),
-          ];
-          return (
-            <Card
-              key={a.id}
-              size="small"
-              style={{ marginBottom: 12 }}
-              title={
-                <Space size="small">
-                  <span style={{ fontWeight: 500 }}>{a.title || '(无标题)'}</span>
-                  <PlatformTag platform={a.platform} />
-                </Space>
-              }
-              extra={
-                <Button size="small" type="link" icon={<EyeOutlined />}
-                  onClick={() => { setCompareOpen(false); navigate(`/analysis/${a.id}`); }}>
-                  详情
-                </Button>
-              }
-            >
-              {tabs.length > 0 ? (
-                <Tabs size="small" items={tabs} />
-              ) : (
-                <span style={{ color: '#999' }}>（无已生成的分析项）</span>
-              )}
-            </Card>
-          );
-        })}
-      </Drawer>
     </div>
   );
 }

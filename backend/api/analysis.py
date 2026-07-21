@@ -1,9 +1,11 @@
 """视频分析任务 REST API。"""
+import json
 import logging
 import shutil
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,12 +21,14 @@ from backend.schemas import (
     AnalysisCandidateResponse, AnalysisCandidateListResponse,
     AnalysisBatchCreateRequest,
     AnalysisDigestRequest, AnalysisDigestResponse,
+    AnalysisChatRequest, AnalysisChatResponse,
+    AnalysisBatchDetailRequest,
 )
 from backend.engine.analyzer import analysis_engine
 from backend.engine.asr import get_asr_provider
 from backend.engine.llm_client import LlmClient, build_digest_prompt
 
-logger = logging.getLogger("fapai.api.analysis")
+logger = logging.getLogger("lx_datahunter.api.analysis")
 router = APIRouter(prefix="/api/v1/analysis", tags=["analysis"])
 
 
@@ -103,7 +107,7 @@ async def check_analysis():
         asr_message = str(e)
 
     llm_ready = bool(settings.llm_base_url and settings.llm_api_key)
-    llm_message = "ok" if llm_ready else "未配置 FAPAI_LLM_BASE_URL / FAPAI_LLM_API_KEY"
+    llm_message = "ok" if llm_ready else "未配置 LLM_BASE_URL / LLM_API_KEY"
 
     return AnalysisCheckResponse(
         ffmpeg_available=ffmpeg_available,
@@ -394,6 +398,118 @@ async def create_digest(body: AnalysisDigestRequest, db: AsyncSession = Depends(
         source_count=len(items),
         llm_model=settings.llm_model,
     )
+
+
+# ---- 对总结内容多轮对话（不落库）----
+# 注意：必须在 /{analysis_id} 之前注册，否则会被路径参数吞掉。
+
+async def _build_chat_context(
+    db: AsyncSession, analysis_ids: list[int], task: str
+) -> str:
+    """读取选中分析的指定维度总结，拼成对话 system 上下文文本。
+
+    抛 HTTPException(400) 当 task 非法或无可聚合内容。供 /chat 与
+    /chat/stream 共享。
+    """
+    if task not in _DIGEST_FIELD:
+        raise HTTPException(400, f"不支持的 task: {task}（可选 summary / knowledge）")
+
+    ids = list(dict.fromkeys(analysis_ids))
+    result = await db.execute(
+        select(VideoAnalysis).where(
+            VideoAnalysis.id.in_(ids),
+            VideoAnalysis.status == AnalysisStatus.COMPLETED.value,
+        )
+    )
+    analyses = {a.id: a for a in result.scalars().all()}
+
+    field_name = _DIGEST_FIELD[task]
+    parts = []
+    for aid in ids:
+        a = analyses.get(aid)
+        if not a:
+            continue
+        text = (getattr(a, field_name) or "").strip()
+        if not text:
+            continue
+        parts.append(f"### {a.title or '(无标题)'}\n{text}")
+
+    if not parts:
+        raise HTTPException(400, "没有可作为对话上下文的总结内容")
+
+    context = "\n\n".join(parts)
+    return (
+        "你是知识助理。以下是一组视频的总结内容，作为你回答问题的唯一依据。"
+        "请基于这些素材回答用户问题；如果素材中没有相关信息，请明确说明"
+        "「素材中未提及」，不要编造。\n\n"
+        f"=== 视频总结素材 ===\n{context}"
+    )
+
+
+@router.post("/chat", response_model=AnalysisChatResponse)
+async def chat_with_analyses(body: AnalysisChatRequest, db: AsyncSession = Depends(get_db)):
+    """对选中视频的总结内容进行多轮对话（非流式）。
+
+    - 把选中分析的单项总结（content_summary 或 knowledge_summary）拼进 system，
+      作为问答的固定上下文。
+    - 请求体的 messages 保留历史问答，支持追问与上下文连贯。
+    - 不落库：每次请求无状态，上下文完全由前端维护。
+    """
+    system = await _build_chat_context(db, body.analysis_ids, body.task)
+    messages = [{"role": "system", "content": system}]
+    messages.extend({"role": m.role, "content": m.content} for m in body.messages)
+
+    client = LlmClient.from_settings()
+    answer = await client.chat_messages(messages)
+
+    return AnalysisChatResponse(answer=answer, llm_model=settings.llm_model)
+
+
+@router.post("/chat/stream")
+async def chat_with_analyses_stream(body: AnalysisChatRequest, db: AsyncSession = Depends(get_db)):
+    """对选中视频的总结内容进行多轮对话（SSE 流式打字机效果）。
+
+    事件格式：
+    - ``data: {"token": "..."}\\n\\n`` 逐 token 输出
+    - ``data: {"done": true, "llm_model": "..."}\\n\\n`` 结束
+    - ``data: {"error": "..."}\\n\\n`` 出错
+    """
+    # 上下文构造必须在生成器外完成，以便在此处抛 HTTPException
+    system = await _build_chat_context(db, body.analysis_ids, body.task)
+    messages = [{"role": "system", "content": system}]
+    messages.extend({"role": m.role, "content": m.content} for m in body.messages)
+
+    async def event_generator():
+        client = LlmClient.from_settings()
+        try:
+            async for token in client.chat_messages_stream(messages):
+                yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'done': True, 'llm_model': settings.llm_model}, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            logger.error(f"chat stream error: {e}", exc_info=True)
+            yield f"data: {json.dumps({'error': f'{type(e).__name__}: {e}'}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ---- 批量取分析详情（对比页跨页取数用）----
+# 注意：必须在 /{analysis_id} 之前注册。
+
+@router.post("/batch-detail", response_model=AnalysisListResponse)
+async def batch_detail(body: AnalysisBatchDetailRequest, db: AsyncSession = Depends(get_db)):
+    """按 id 列表批量取分析详情，不依赖列表分页（对比页跨页选中用）。"""
+    ids = list(dict.fromkeys(body.analysis_ids))
+    result = await db.execute(
+        select(VideoAnalysis).where(VideoAnalysis.id.in_(ids))
+    )
+    items = {a.id: a for a in result.scalars().all()}
+    # 按入参顺序返回
+    ordered = [items[i] for i in ids if i in items]
+    return AnalysisListResponse(total=len(ordered), items=[_to_response(a) for a in ordered])
 
 
 # ---- 任务列表 ----

@@ -10,7 +10,7 @@ from backend.engine.hot_crawler import crawl_hot, get_categories
 from backend.api.credentials import get_active_cookie
 from backend.api.ws import broadcast_progress
 
-logger = logging.getLogger("fapai.hot")
+logger = logging.getLogger("lx_datahunter.hot")
 router = APIRouter(prefix="/api/v1/hot", tags=["hot"])
 
 

@@ -9,7 +9,7 @@ from backend.models import (
 )
 from .platforms import get_adapter, ContentItem, CreatorInfo
 
-logger = logging.getLogger("fapai.crawler")
+logger = logging.getLogger("lx_datahunter.crawler")
 
 
 async def crawl_creator(

@@ -11,7 +11,7 @@ from bilibili_api.rank import RankDayType
 from backend.models import Platform, ContentType
 from backend.engine.platforms.base import ContentItem
 
-logger = logging.getLogger("fapai.hot_crawler")
+logger = logging.getLogger("lx_datahunter.hot_crawler")
 
 
 def _run_coro_in_thread(coro):

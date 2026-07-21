@@ -4,13 +4,15 @@
 """
 from __future__ import annotations
 
+import json
 import logging
+from typing import AsyncIterator
 
 import httpx
 
 from backend.config import settings
 
-logger = logging.getLogger("fapai.llm")
+logger = logging.getLogger("lx_datahunter.llm")
 
 
 def build_script_prompt(transcript: str) -> tuple[str, str]:
@@ -124,7 +126,7 @@ class LlmClient:
 
     async def chat(self, system: str, user: str) -> str:
         if not (self.base_url and self.api_key):
-            raise RuntimeError("LLM 未配置：请设置 FAPAI_LLM_BASE_URL 与 FAPAI_LLM_API_KEY")
+            raise RuntimeError("LLM 未配置：请设置 LLM_BASE_URL 与 LLM_API_KEY")
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -146,3 +148,76 @@ class LlmClient:
             resp.raise_for_status()
             data = resp.json()
         return data["choices"][0]["message"]["content"]
+
+    async def chat_messages(self, messages: list[dict]) -> str:
+        """多轮对话：messages 为标准 OpenAI 消息数组（含 system/user/assistant）。
+
+        与 ``chat`` 共用同一套 httpx 调用，区别仅在 messages 由调用方完全掌控，
+        以便保留多轮问答历史。temperature 略高以利于解释性回答。
+        """
+        if not (self.base_url and self.api_key):
+            raise RuntimeError("LLM 未配置：请设置 LLM_BASE_URL 与 LLM_API_KEY")
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.5,
+        }
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.post(
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        return data["choices"][0]["message"]["content"]
+
+    async def chat_messages_stream(self, messages: list[dict]) -> AsyncIterator[str]:
+        """流式多轮对话：逐 token ``yield`` content。
+
+        与 ``chat_messages`` 语义一致，区别在 payload 加 ``stream=True``，
+        用 ``client.stream`` 拿到 SSE 行流，按 OpenAI 格式解析每个 chunk 的
+        ``delta.content``。connect 超时保留默认，read 超时设为 None 避免长回答
+        被中途切断。
+        """
+        if not (self.base_url and self.api_key):
+            raise RuntimeError("LLM 未配置：请设置 LLM_BASE_URL 与 LLM_API_KEY")
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.5,
+            "stream": True,
+        }
+        # 连接建立阶段保留超时，但流式读取阶段不设 read timeout
+        timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream(
+                "POST", f"{self.base_url}/chat/completions",
+                headers=headers, json=payload,
+            ) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
+                    token = delta.get("content")
+                    if token:
+                        yield token

@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     max_concurrent_analyses: int = 2
     max_analysis_retries: int = 3
 
-    model_config = {"env_prefix": "FAPAI_", "env_file": ".env"}
+    model_config = {"env_prefix": "", "env_file": ".env"}
 
 
 settings = Settings()

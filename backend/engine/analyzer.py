@@ -26,7 +26,7 @@ from backend.engine.llm_client import (
     LlmClient, build_script_prompt, build_summary_prompt, build_knowledge_prompt,
 )
 
-logger = logging.getLogger("fapai.analyzer")
+logger = logging.getLogger("lx_datahunter.analyzer")
 
 ProgressBroadcast = Callable[[dict], Coroutine[Any, Any, None]]
 
@@ -282,7 +282,7 @@ class AnalysisEngine:
         用标准库 subprocess.run（阻塞）跑在执行器线程里——不依赖 asyncio 子进程
         支持，因此在 SelectorEventLoop（Windows --reload）下也能工作。
         """
-        fd, out = tempfile.mkstemp(prefix="fapai_audio_", suffix=".wav")
+        fd, out = tempfile.mkstemp(prefix="lx_datahunter_audio_", suffix=".wav")
         os.close(fd)  # ffmpeg 会自己写这个文件
         try:
             await asyncio.get_running_loop().run_in_executor(

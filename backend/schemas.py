@@ -251,6 +251,30 @@ class AnalysisDigestResponse(BaseModel):
     llm_model: str
 
 
+class ChatMessage(BaseModel):
+    """单条对话消息（OpenAI 兼容格式）。"""
+    role: str = Field(..., description="user | assistant")
+    content: str
+
+
+class AnalysisChatRequest(BaseModel):
+    """对选中视频的总结内容进行多轮对话。"""
+    analysis_ids: list[int] = Field(..., min_length=1, max_length=50, description="作为上下文的分析任务 id 列表")
+    task: str = Field(default="summary", description="对话上下文维度：summary | knowledge")
+    messages: list[ChatMessage] = Field(..., min_length=1, description="历史问答消息（最后一条为本次提问）")
+
+
+class AnalysisChatResponse(BaseModel):
+    """对话响应（不落库）。"""
+    answer: str
+    llm_model: str
+
+
+class AnalysisBatchDetailRequest(BaseModel):
+    """按 id 列表批量取分析详情（用于对比页跨页取数）。"""
+    analysis_ids: list[int] = Field(..., min_length=1, max_length=50)
+
+
 class AnalysisCheckResponse(BaseModel):
     ffmpeg_available: bool
     ffmpeg_path: str

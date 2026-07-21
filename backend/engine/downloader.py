@@ -19,7 +19,7 @@ from backend.models import (
     DownloadTask, DownloadStatus, ContentSnapshot, PlatformCredential,
 )
 
-logger = logging.getLogger("fapai.downloader")
+logger = logging.getLogger("lx_datahunter.downloader")
 
 CHROME_PATHS = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",

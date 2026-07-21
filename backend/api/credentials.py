@@ -9,7 +9,7 @@ from backend.database import get_db
 from backend.models import PlatformCredential
 from backend.schemas import CredentialCreate, CredentialResponse
 
-logger = logging.getLogger("fapai.credentials")
+logger = logging.getLogger("lx_datahunter.credentials")
 router = APIRouter(prefix="/api/v1/credentials", tags=["credentials"])
 
 

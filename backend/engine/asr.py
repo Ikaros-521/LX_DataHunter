@@ -12,7 +12,7 @@ from typing import Protocol
 
 from backend.config import settings
 
-logger = logging.getLogger("fapai.asr")
+logger = logging.getLogger("lx_datahunter.asr")
 
 
 @dataclass
@@ -115,7 +115,7 @@ class AliyunAsrProvider:
 
     def __init__(self, access_key: str, secret_key: str, app_key: str):
         if not (access_key and secret_key and app_key):
-            raise RuntimeError("阿里云 ASR 缺少凭证：请配置 FAPAI_ALIYUN_ASR_ACCESS_KEY/SECRET_KEY/APP_KEY")
+            raise RuntimeError("阿里云 ASR 缺少凭证：请配置 ALIYUN_ASR_ACCESS_KEY/SECRET_KEY/APP_KEY")
         self.access_key = access_key
         self.secret_key = secret_key
         self.app_key = app_key
