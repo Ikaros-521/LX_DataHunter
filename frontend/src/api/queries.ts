@@ -455,3 +455,137 @@ export function useDeleteAnalysis() {
 export function useAnalysisCheck() {
   return useQuery({ queryKey: ['analysis', 'check'], queryFn: () => client.get('/analysis/check').then(r => r.data as AnalysisCheck) });
 }
+
+// ---- 竞品调研 (Competitor Research) ----
+export interface Competitor {
+  id: number; name: string; platform: string; platform_uid: string;
+  homepage_url: string; nickname: string; note: string; enabled: boolean;
+  follower_count: number; last_researched_at: string | null;
+  extra_info: Record<string, any>; created_at: string; updated_at: string;
+}
+
+export interface DiscoveredCompetitor {
+  platform: string; platform_uid: string; nickname: string;
+  signature: string; follower_count: number; video_hits: number;
+  sample_titles: string[]; homepage_url: string;
+}
+
+export interface ResearchTask {
+  id: number; title: string; status: string; stage: string; progress: number;
+  competitor_ids: number[]; competitor_count: number;
+  params: Record<string, any>; market_overview: string; markdown_path: string;
+  trigger_type: string; error_message: string;
+  created_at: string; started_at: string | null; finished_at: string | null;
+}
+
+export interface ResearchSchedule {
+  id: number; interval_minutes: number; enabled: boolean;
+  last_run_at: string | null; next_run_at: string | null;
+  params: Record<string, any>;
+}
+
+export function useCompetitors(params?: Record<string, any>) {
+  return useQuery<PaginatedResponse<Competitor>>({
+    queryKey: ['competitors', params],
+    queryFn: () => client.get('/competitors', { params }).then(r => r.data),
+  });
+}
+
+export function useAddCompetitor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { platform: string; platform_uid: string; name?: string; note?: string }) =>
+      client.post('/competitors', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['competitors'] }),
+  });
+}
+
+export function useUpdateCompetitor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: number; name?: string; note?: string; enabled?: boolean }) =>
+      client.put(`/competitors/${id}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['competitors'] }),
+  });
+}
+
+export function useDeleteCompetitor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => client.delete(`/competitors/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['competitors'] }),
+  });
+}
+
+export function useDiscoverCompetitors() {
+  return useMutation({
+    mutationFn: (body: { platform: string; keyword: string; max_items?: number }) =>
+      client.post('/competitors/discover', body, { timeout: 300000 }).then(
+        r => r.data as { platform: string; keyword: string; candidates: DiscoveredCompetitor[]; message: string }),
+  });
+}
+
+const ACTIVE_RESEARCH_STATUSES = ['pending', 'collecting', 'crawling_comments', 'analyzing'];
+
+export function useResearchList() {
+  return useQuery<PaginatedResponse<ResearchTask>>({
+    queryKey: ['research'],
+    queryFn: () => client.get('/research', { params: { page_size: 50 } }).then(r => r.data),
+    // 有进行中的任务时 2s 轮询进度
+    refetchInterval: (query) =>
+      query.state.data?.items.some(t => ACTIVE_RESEARCH_STATUSES.includes(t.status)) ? 2000 : false,
+  });
+}
+
+export function useResearchDetail(id: number | null) {
+  return useQuery<ResearchTask>({
+    queryKey: ['research', id],
+    queryFn: () => client.get(`/research/${id}`).then(r => r.data),
+    enabled: id != null,
+    refetchInterval: (query) =>
+      query.state.data && ACTIVE_RESEARCH_STATUSES.includes(query.state.data.status) ? 2000 : false,
+  });
+}
+
+export function useCreateResearch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      title?: string; competitor_ids: number[];
+      date_from?: string | null; date_to?: string | null;
+      max_videos_per_competitor?: number; top_videos_for_comments?: number;
+      max_comments_per_video?: number;
+    }) => client.post('/research', body).then(r => r.data as ResearchTask),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['research'] }),
+  });
+}
+
+export function useDeleteResearch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => client.delete(`/research/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['research'] }),
+  });
+}
+
+export function useResearchSchedule() {
+  return useQuery<ResearchSchedule>({
+    queryKey: ['research', 'schedule'],
+    queryFn: () => client.get('/research/schedule').then(r => r.data),
+  });
+}
+
+export function useUpdateResearchSchedule() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { interval_minutes: number; enabled: boolean; params?: Record<string, any> }) =>
+      client.put('/research/schedule', body).then(r => r.data as ResearchSchedule),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['research', 'schedule'] }),
+  });
+}
+
+/** 拉取报告 markdown 原文（非 JSON）。 */
+export async function fetchReportMarkdown(id: number): Promise<string> {
+  const resp = await client.get(`/research/${id}/file`, { responseType: 'text', transformResponse: (x) => x });
+  return resp.data as string;
+}

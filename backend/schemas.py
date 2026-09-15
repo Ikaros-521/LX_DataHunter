@@ -314,3 +314,122 @@ class AnalysisCandidateResponse(BaseModel):
 class AnalysisCandidateListResponse(BaseModel):
     total: int
     items: list[AnalysisCandidateResponse]
+
+
+# ---- 竞品调研（Competitor Research）----
+class CompetitorCreate(BaseModel):
+    platform: Platform
+    # 支持三种格式：主页链接 / 平台 uid（抖音 sec_uid、B站 mid）
+    platform_uid: str = Field(..., min_length=1, max_length=500, description="主页链接 / 抖音 sec_uid / B站 mid")
+    name: str = Field(default="", max_length=255, description="自定义备注名（如：竞品A-XX品牌）")
+    note: str = ""
+
+
+class CompetitorUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=255)
+    note: str | None = None
+    enabled: bool | None = None
+
+
+class CompetitorResponse(BaseModel):
+    id: int
+    name: str
+    platform: Platform
+    platform_uid: str
+    homepage_url: str
+    nickname: str
+    note: str
+    enabled: bool
+    follower_count: int
+    last_researched_at: Optional[datetime] = None
+    extra_info: dict = {}
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CompetitorListResponse(BaseModel):
+    total: int
+    items: list[CompetitorResponse]
+
+
+class DiscoverRequest(BaseModel):
+    platform: Platform = Field(default=Platform.BILIBILI, description="发现渠道：bilibili 纯 API；douyin 需登录")
+    keyword: str = Field(..., min_length=1, max_length=100)
+    max_items: int = Field(default=20, ge=5, le=60, description="搜索返回的视频条数上限")
+
+
+class DiscoveredCompetitor(BaseModel):
+    """关键词发现的候选竞品账号。"""
+    platform: str
+    platform_uid: str
+    nickname: str = ""
+    signature: str = ""
+    follower_count: int = 0
+    video_hits: int = 0                 # 搜索结果中该账号出现的视频数
+    sample_titles: list[str] = []       # 命中视频标题样例
+    homepage_url: str = ""
+
+
+class DiscoverResponse(BaseModel):
+    platform: str
+    keyword: str
+    candidates: list[DiscoveredCompetitor]
+    message: str = ""                   # 异常/降级说明（如抖音未登录）
+
+
+class ResearchCreateRequest(BaseModel):
+    title: str = Field(default="", max_length=255)
+    competitor_ids: list[int] = Field(..., min_length=1, max_length=20)
+    date_from: str | None = Field(default=None, description="起始日期 YYYY-MM-DD")
+    date_to: str | None = Field(default=None, description="截止日期 YYYY-MM-DD")
+    max_videos_per_competitor: int = Field(default=8, ge=1, le=50, description="每竞品抓取的视频数")
+    top_videos_for_comments: int = Field(default=5, ge=0, le=10, description="每竞品爬评论的爆款视频数")
+    max_comments_per_video: int = Field(default=50, ge=1, le=500, description="每视频抓取的评论数")
+
+
+class ResearchTaskResponse(BaseModel):
+    id: int
+    title: str
+    status: str
+    stage: str
+    progress: float
+    competitor_ids: list[int] = []
+    competitor_count: int = 0
+    params: dict = {}
+    market_overview: str = ""
+    markdown_path: str = ""
+    trigger_type: str = "manual"
+    error_message: str = ""
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ResearchListResponse(BaseModel):
+    total: int
+    items: list[ResearchTaskResponse]
+
+
+class ResearchScheduleUpsert(BaseModel):
+    interval_minutes: int = Field(default=10080, ge=30, le=43200)
+    enabled: bool = False
+    params: dict = Field(
+        default={},
+        description="调研参数覆盖：days(回看天数)/max_videos_per_competitor/"
+                    "top_videos_for_comments/max_comments_per_video/title_prefix",
+    )
+
+
+class ResearchScheduleResponse(BaseModel):
+    id: int
+    interval_minutes: int
+    enabled: bool
+    last_run_at: Optional[datetime] = None
+    next_run_at: Optional[datetime] = None
+    params: dict = {}
+
+    model_config = {"from_attributes": True}

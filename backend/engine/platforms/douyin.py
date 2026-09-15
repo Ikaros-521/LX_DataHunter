@@ -61,6 +61,29 @@ class DouyinAdapter(BasePlatformAdapter):
                 locale="zh-CN",
                 viewport={"width": 1920, "height": 1080},
             )
+
+            # 反自动化检测：移除 navigator.webdriver 指纹，降低滑块验证码触发概率
+            await context.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
+            )
+
+            # 注入登录态 Cookie（必须在 goto 之前），模式同 hot_crawler
+            if cookie_str:
+                injected = 0
+                for item in cookie_str.split(";"):
+                    item = item.strip()
+                    if "=" in item:
+                        k, _, v = item.partition("=")
+                        try:
+                            await context.add_cookies([{
+                                "name": k.strip(), "value": v.strip(),
+                                "domain": ".douyin.com", "path": "/",
+                            }])
+                            injected += 1
+                        except Exception:
+                            pass
+                logger.info(f"Injected {injected} cookies into Douyin context")
+
             page = await context.new_page()
 
             async def on_response(response):

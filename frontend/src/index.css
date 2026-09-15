@@ -109,3 +109,49 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+/* ---- 竞品调研报告 markdown 渲染 ---- */
+.markdown-body {
+  text-align: left;
+  line-height: 1.7;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  text-align: left;
+  margin: 20px 0 8px;
+  font-weight: 600;
+}
+.markdown-body h1 { font-size: 24px; }
+.markdown-body h2 { font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.markdown-body h3 { font-size: 17px; }
+.markdown-body h4 { font-size: 15px; }
+.markdown-body p { margin: 8px 0; }
+.markdown-body ul,
+.markdown-body ol { padding-left: 22px; margin: 8px 0; }
+.markdown-body blockquote {
+  margin: 8px 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--accent-border);
+  background: var(--social-bg);
+  border-radius: 4px;
+  color: var(--text);
+}
+.markdown-body table.research-md-table th,
+.markdown-body table.research-md-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  font-size: 14px;
+  text-align: left;
+  white-space: nowrap;
+}
+.markdown-body table.research-md-table th {
+  background: var(--social-bg);
+  font-weight: 600;
+}
+.markdown-body table.research-md-table td:first-child,
+.markdown-body table.research-md-table th:first-child {
+  white-space: normal;
+  min-width: 120px;
+}

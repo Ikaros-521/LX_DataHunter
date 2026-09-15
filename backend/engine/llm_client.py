@@ -106,6 +106,77 @@ def build_digest_prompt(items: list[tuple[str, str]]) -> tuple[str, str]:
     return system, user
 
 
+def build_market_overview_prompt(competitors_summary: str) -> tuple[str, str]:
+    """竞品调研：跨竞品市场概览 (system, user) prompt。"""
+    system = (
+        "你是资深市场竞争分析师，擅长基于多账号的公开运营数据与评论区反馈，"
+        "评估各竞品的内容策略、用户口碑与市场位置。只基于给定素材，"
+        "不要编造未提及的信息。"
+    )
+    user = (
+        f"以下是若干竞品账号的调研摘要：\n\n{competitors_summary}\n\n"
+        "请输出跨竞品的市场对比分析（用 markdown，严格按下列分节）：\n"
+        "## 市场格局\n概述这个赛道的内容生态：主要玩家、体量差异、内容形态。\n\n"
+        "## 各家优势与短板\n用列表逐个竞品说明其内容优势与明显短板（有评论区证据时注明）。\n\n"
+        "## 差异化机会\n指出尚未被充分覆盖的内容方向、人群或表达形式（3 条以内）。\n\n"
+        "## 行动建议\n给出可立即执行的跟进建议（3 条以内）。\n\n"
+        "要求：语言精炼、结论先行；引用数据时保留原数字。"
+    )
+    return system, user
+
+
+def build_competitor_content_prompt(creator_desc: str, videos_table: str) -> tuple[str, str]:
+    """竞品调研：单竞品内容策略分析 (system, user) prompt。
+
+    creator_desc 为账号概况文本；videos_table 为近期视频元数据
+    （标题/发布时间/播放/点赞/评论/分享）的文本行列表。
+    """
+    system = (
+        "你是资深短视频内容策略分析师。基于账号公开信息与近期视频的"
+        "标题及互动数据（不含视频内容本身），推断其内容策略与运营水平，"
+        "并明确标注哪些是推断。"
+    )
+    user = (
+        f"账号概况：\n{creator_desc}\n\n"
+        f"近期视频列表（标题 | 发布时间 | 播放 | 点赞 | 评论 | 分享 | 收藏 | 标签）：\n"
+        f"{videos_table}\n\n"
+        "请分析该账号（用 markdown，严格按下列分节）：\n"
+        "## 内容方向与定位\n主打什么主题/人群/场景，内容组合如何。\n\n"
+        "## 发布节奏与产量\n按发布时间推断更新频率、稳定性和发布时间偏好。\n\n"
+        "## 爆款特征\n指出互动量最高的 1-3 条视频，从标题/标签归纳其共性钩子。\n\n"
+        "## 制作与运营水平\n按互动率（点赞/播放等可算则算）评估内容质量、"
+        "商业化痕迹（广告/带货信号）与运营手法。\n\n"
+        "## 值得关注\n3 条以内：对手做得好、值得借鉴或需要警惕的点。\n\n"
+        "要求：结论基于数据，不臆造视频画面内容。"
+    )
+    return system, user
+
+
+def build_comment_insight_prompt(creator_desc: str, comments_text: str) -> tuple[str, str]:
+    """竞品调研：单竞品评论区洞察 (system, user) prompt。
+
+    comments_text 为按点赞排序的评论文本行（含点赞数与 IP 属地）。
+    """
+    system = (
+        "你是资深用户研究分析师，擅长从视频评论区提炼用户画像、口碑与"
+        "真实需求。只基于给定评论，不要编造。"
+    )
+    user = (
+        f"账号概况：\n{creator_desc}\n\n"
+        f"该账号爆款视频评论区的高赞评论（点赞数 | IP属地 | 内容）：\n"
+        f"{comments_text}\n\n"
+        "请输出评论区洞察（用 markdown，严格按下列分节）：\n"
+        "## 用户画像\n评论者的典型人群、关注点与语气。\n\n"
+        "## 口碑倾向\n好评集中在哪（产品/内容/服务），差评或质疑集中在哪；"
+        "尽量给出大致比例感受。\n\n"
+        "## 用户痛点与需求信号\n列出评论区反复出现的痛点、愿望、功能请求或"
+        "购买意向（有原文则短引佐证）。\n\n"
+        "## 对我方的启示\n3 条以内可执行结论（如可切入的内容点、可回应的质疑）。\n\n"
+        "要求：引用评论原文时保持简短；无法判断的写「信息不足」。"
+    )
+    return system, user
+
+
 class LlmClient:
     """OpenAI 兼容 /chat/completions 客户端。"""
 

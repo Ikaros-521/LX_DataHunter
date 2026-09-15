@@ -2,7 +2,7 @@ import { Layout, Menu, Typography } from 'antd';
 import {
   DashboardOutlined, UserOutlined, SearchOutlined,
   ThunderboltOutlined, KeyOutlined, ClockCircleOutlined, FireOutlined,
-  DownloadOutlined, VideoCameraOutlined,
+  DownloadOutlined, VideoCameraOutlined, FundViewOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -15,6 +15,7 @@ const menuItems = [
   { key: '/search', icon: <SearchOutlined />, label: '内容检索' },
   { key: '/downloads', icon: <DownloadOutlined />, label: '下载管理' },
   { key: '/analysis', icon: <VideoCameraOutlined />, label: '视频分析' },
+  { key: '/research', icon: <FundViewOutlined />, label: '竞品调研' },
   { key: '/credentials', icon: <KeyOutlined />, label: '凭证管理' },
   { key: '/schedules', icon: <ClockCircleOutlined />, label: '定时任务' },
   { key: '/hot', icon: <FireOutlined />, label: '热门爬取' },

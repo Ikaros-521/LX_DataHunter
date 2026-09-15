@@ -126,15 +126,20 @@ class BilibiliAdapter(BasePlatformAdapter):
         try:
             u = user.User(mid, credential=cred)
             info = sync(u.get_user_info())
+            # get_user_info 不含粉丝数（card 接口无该字段），
+            # 用 relation/stat 接口兜底
             followers = 0
             try:
-                # get_user_info might not return follower count directly
-                # Use relation stat as fallback
-                from bilibili_api import api
-                # Just get what's available
-                followers = info.get("follower", 0) or info.get("fans", 0)
-            except Exception:
-                pass
+                import httpx
+                async with httpx.AsyncClient(timeout=15) as c:
+                    r = await c.get(
+                        "https://api.bilibili.com/x/relation/stat",
+                        params={"vmid": mid},
+                        headers={"User-Agent": "Mozilla/5.0"},
+                    )
+                    followers = (r.json().get("data") or {}).get("follower", 0)
+            except Exception as e:
+                logger.warning(f"relation/stat failed for {mid}: {e}")
             return CreatorInfo(
                 nickname=info.get("name", ""),
                 signature=info.get("sign", ""),

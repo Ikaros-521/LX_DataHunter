@@ -14,9 +14,10 @@
 | **视频下载** | yt-dlp 统一后端 + 抖音专用 Playwright 直链拦截（无水印），异步队列 + 并发控制 + 断点恢复 |
 | **语音识别** | ffmpeg 抽音频 → faster-whisper 本地 ASR（也可切换阿里云在线 ASR），分段 + 全文输出 |
 | **LLM 智能分析** | 三项可独立勾选：内容总结、脚本与制作手法分析、知识点提炼，并行调用 LLM API |
-| **实时进度** | WebSocket 推送爬取、下载、分析全链路实时进度 |
+| **竞品调研** | 竞品账号管理（手动添加/关键词发现）→ 一键或定时调研：抓主页与近期视频、爬爆款视频评论区、页面截图 → LLM 内容策略/评论区洞察/市场对比分析 → 生成自包含 Markdown 报告（截图+视频链接+数据表），在线查看/下载 |
+| **实时进度** | WebSocket 推送爬取、下载、分析、竞品调研全链路实时进度 |
 | **凭证管理** | 集中管理各平台 Cookie，供爬虫和下载器携带登录态请求 |
-| **React 前端** | Ant Design SPA，覆盖仪表盘、创作者列表/详情、爬虫控制台、内容搜索、热门抓取、下载管理、视频分析对比等页面 |
+| **React 前端** | Ant Design SPA，覆盖仪表盘、创作者列表/详情、爬虫控制台、内容搜索、热门抓取、下载管理、视频分析对比、竞品调研等页面 |
 
 ## 技术栈
 
@@ -137,18 +138,22 @@ LX_DataHunter/
 │   │   ├── ws.py             # 爬取进度 WebSocket
 │   │   ├── download_ws.py    # 下载进度 WebSocket
 │   │   └── analysis_ws.py    # 分析进度 WebSocket
-│   └── engine/               # 核心引擎
-│       ├── crawler.py        # 爬虫编排器（session 管理 / 去重 / delta）
-│       ├── hot_crawler.py    # 热门/排行榜爬取（B站 API + 抖音搜索）
-│       ├── downloader.py     # 异步下载队列（yt-dlp + 抖音直链拦截）
-│       ├── analyzer.py       # 异步分析队列（ffmpeg → ASR → LLM）
-│       ├── scheduler.py      # APScheduler 生命周期管理
-│       ├── asr.py            # ASR provider 抽象（local / aliyun）
-│       ├── llm_client.py     # LLM 客户端 + prompt 构造
-│       └── platforms/        # 平台适配器
-│           ├── base.py       # 抽象基类 + ContentItem/CreatorInfo
-│           ├── douyin.py     # 抖音适配器（Playwright XHR 拦截）
-│           └── bilibili.py   # B站适配器
+│   ├── engine/               # 核心引擎
+│   │   ├── crawler.py        # 爬虫编排器（session 管理 / 去重 / delta）
+│   │   ├── hot_crawler.py    # 热门/排行榜爬取（B站 API + 抖音搜索）
+│   │   ├── downloader.py     # 异步下载队列（yt-dlp + 抖音直链拦截）
+│   │   ├── analyzer.py       # 异步分析队列（ffmpeg → ASR → LLM）
+│   │   ├── research_engine.py # 竞品调研编排（抓取→评论→截图→LLM→报告）
+│   │   ├── comment_crawler.py # 评论区爬取（B站 SDK + 抖音 XHR 拦截）+ 截图
+│   │   ├── competitor_discovery.py # 关键词发现竞品账号（B站搜索 + 抖音搜索）
+│   │   ├── report_builder.py # 竞品调研 Markdown 报告拼装（纯函数）
+│   │   ├── scheduler.py      # APScheduler 生命周期管理
+│   │   ├── asr.py            # ASR provider 抽象（local / aliyun）
+│   │   ├── llm_client.py     # LLM 客户端 + prompt 构造
+│   │   └── platforms/        # 平台适配器
+│   │       ├── base.py       # 抽象基类 + ContentItem/CreatorInfo
+│   │       ├── douyin.py     # 抖音适配器（Playwright XHR 拦截 + Cookie 注入）
+│   │       └── bilibili.py   # B站适配器
 ├── frontend/                 # React SPA
 │   └── src/
 │       ├── pages/            # 路由页面（Dashboard / Creator / Crawler / Analysis...）
@@ -175,6 +180,10 @@ LX_DataHunter/
 | `download_tasks` | 下载任务状态机（pending → downloading → completed/failed） |
 | `video_analyses` | 视频分析结果（ASR 分段/全文 + 各维度 LLM 分析） |
 | `platform_credentials` | 平台 Cookie 凭证（供爬虫和下载器携带） |
+| `competitors` | 竞品账号（platform + platform_uid 唯一，调研后回填昵称/粉丝数） |
+| `research_tasks` | 竞品调研任务（状态机 + 参数 + 各竞品统计 + 报告路径） |
+| `research_comments` | 调研抓取的评论快照（按任务/竞品索引，支持跨报告对比） |
+| `research_schedules` | 竞品调研定时配置（单行：interval + 参数覆盖） |
 
 ## API 端点
 
@@ -217,6 +226,23 @@ LX_DataHunter/
 | GET/POST/PUT/DELETE | `/api/v1/credentials` | 平台凭证 CRUD |
 | GET | `/api/v1/schedules` | 列出调度配置 |
 | PUT | `/api/v1/schedules/{creator_id}` | 创建/更新调度 |
+
+### 竞品调研
+
+| Method | Path | 描述 |
+|--------|------|------|
+| GET/POST/PUT/DELETE | `/api/v1/competitors` | 竞品 CRUD（支持主页链接自动解析 uid） |
+| POST | `/api/v1/competitors/discover` | 关键词发现候选竞品（B站纯 API；抖音需登录 Cookie） |
+| POST | `/api/v1/research` | 创建调研任务（202，后台执行） |
+| GET | `/api/v1/research` | 调研任务列表 |
+| GET | `/api/v1/research/{id}` | 任务详情（状态/进度） |
+| DELETE | `/api/v1/research/{id}` | 删除任务及报告文件 |
+| GET | `/api/v1/research/{id}/file` | 报告 Markdown（`?download=true` 下载） |
+| GET | `/api/v1/research/{id}/assets/{name}` | 报告截图资源 |
+| GET/PUT | `/api/v1/research/schedule` | 定时调研配置 |
+| WS | `/ws/research` | 调研进度广播 |
+
+报告输出目录：`output/reports/{task_id}_{title}/report.md`（`assets/` 存截图，已 gitignore）。
 
 ### WebSocket
 

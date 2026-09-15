@@ -12,6 +12,8 @@ import DownloadManager from './pages/DownloadManager';
 import VideoAnalysisPage from './pages/VideoAnalysis';
 import VideoAnalysisDetail from './pages/VideoAnalysisDetail';
 import AnalysisCompare from './pages/AnalysisCompare';
+import CompetitorResearch from './pages/CompetitorResearch';
+import ResearchReportView from './pages/ResearchReportView';
 
 export default function App() {
   return (
@@ -26,6 +28,8 @@ export default function App() {
         <Route path="/analysis" element={<VideoAnalysisPage />} />
         <Route path="/analysis/compare" element={<AnalysisCompare />} />
         <Route path="/analysis/:id" element={<VideoAnalysisDetail />} />
+        <Route path="/research" element={<CompetitorResearch />} />
+        <Route path="/research/view/:id" element={<ResearchReportView />} />
         <Route path="/credentials" element={<CredentialManager />} />
         <Route path="/schedules" element={<ScheduleManager />} />
         <Route path="/hot" element={<HotCrawl />} />

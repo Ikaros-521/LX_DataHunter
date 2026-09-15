@@ -31,6 +31,9 @@ from .api.downloads import router as downloads_router
 from .api.download_ws import router as download_ws_router
 from .api.analysis import router as analysis_router
 from .api.analysis_ws import router as analysis_ws_router, broadcast_analysis_progress
+from .api.research import router as research_router
+from .api.research_ws import router as research_ws_router, broadcast_research_progress
+from .api.competitors import router as competitors_router
 from .config import settings
 from .database import engine
 from .models import Base
@@ -174,6 +177,11 @@ async def lifespan(app: FastAPI):
     await analysis_engine.start()
     logger.info("Analysis engine initialized")
 
+    # ---- 竞品调研引擎（WS 进度广播） ----
+    from .engine.research_engine import research_engine
+    research_engine.set_broadcast(broadcast_research_progress)
+    logger.info("Research engine initialized")
+
     yield
 
     # ---- 停止下载引擎 ----
@@ -232,6 +240,9 @@ app.include_router(downloads_router)
 app.include_router(download_ws_router)
 app.include_router(analysis_router)
 app.include_router(analysis_ws_router)
+app.include_router(research_router)
+app.include_router(research_ws_router)
+app.include_router(competitors_router)
 
 
 @app.get("/api/health")
