@@ -529,9 +529,59 @@ def test_crawl_bilibili_danmakus_permission_denied(monkeypatch):
 def test_build_video_filter_prompt():
     from backend.engine.llm_client import build_video_filter_prompt
     system, user = build_video_filter_prompt("关键词「AI剪辑」的赛道内容",
-                                             [(1, "AI剪辑神器测评"), (2, "我的一天vlog")])
-    assert "调研主题" in user and "AI剪辑神器测评" in user
+                                             [(1, "AI剪辑神器测评", "剪辑老王"),
+                                              (2, "我的一天vlog", "小张日记")])
+    assert "调研主题" in user and "AI剪辑神器测评" in user and "剪辑老王" in user
     assert "JSON" in system or "JSON" in user
+
+
+def test_filter_videos_by_llm_batches_and_fallback():
+    """分批筛选合并结果；某批调用失败/解析失败时保守保留该批。"""
+    import asyncio
+    import json as _json
+    from backend.engine.research_engine import ResearchEngine
+    from backend.engine.llm_client import LlmClient
+
+    engine = ResearchEngine()
+
+    class FakeLlm(LlmClient):
+        def __init__(self, behaviors):
+            super().__init__("http://fake", "k", "m", 1)
+            self._behaviors = behaviors
+            self.calls = 0
+
+        async def chat(self, system, user):
+            b = self._behaviors[min(self.calls, len(self._behaviors) - 1)]
+            self.calls += 1
+            if b == "fail":
+                raise RuntimeError("rate limited")
+            return b
+
+    videos = [{"title": f"视频{i}", "author_nickname": f"作者{i}"} for i in range(30)]
+    section: dict = {"warnings": []}
+
+    # 30 条 → 2 批：第一批保留偶数号，第二批调用失败保守保留
+    behaviors = [_json.dumps({"keep": [2, 4], "drop_reasons": {}}), "fail"]
+    kept = asyncio.run(engine._filter_videos_by_llm(
+        FakeLlm(behaviors), "AI剪辑", videos, section))
+    batch1_kept = [v for i, v in enumerate(videos[:25], 1) if i in (2, 4)]
+    assert kept == batch1_kept + videos[25:]  # 第二批全保留
+    assert section["llm_filtered_out"] == 23
+    assert any("调用失败" in w for w in section["warnings"])
+
+    # 解析失败 → 该批保留
+    section2: dict = {"warnings": []}
+    kept2 = asyncio.run(engine._filter_videos_by_llm(
+        FakeLlm(["不是JSON"]), "AI剪辑", videos[:5], section2))
+    assert kept2 == videos[:5]
+    assert any("解析失败" in w for w in section2["warnings"])
+
+    # 全部不相关 → 保守保留
+    section3: dict = {"warnings": []}
+    kept3 = asyncio.run(engine._filter_videos_by_llm(
+        FakeLlm([_json.dumps({"keep": []})]), "AI剪辑", videos[:5], section3))
+    assert kept3 == videos[:5]
+    assert section3["llm_filtered_out"] == 0
 
 
 def test_parse_keep_indexes():

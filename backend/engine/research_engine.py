@@ -271,7 +271,8 @@ class ResearchEngine:
                 f"抓取竞品数据（{i + 1}/{n}）：{_comp_label(comp)}",
                 P_COLLECT_START + (P_COLLECT_END - P_COLLECT_START) * i / n,
             )
-            section = await self._collect_competitor(comp, params, cookies.get(comp.platform))
+            section = await self._collect_competitor(comp, params, cookies.get(comp.platform),
+                                                     llm, llm_ready)
             sections.append(section)
             # 抓完立即回填竞品元数据
             comp.follower_count = section.get("follower_count") or comp.follower_count or 0
@@ -289,7 +290,7 @@ class ResearchEngine:
                 P_COMMENT_START + (P_COMMENT_END - P_COMMENT_START) * i / n,
             )
             await self._collect_comments(db, task, comp, section, params,
-                                         cookies.get(comp.platform), llm, llm_ready)
+                                         cookies.get(comp.platform))
 
         # ---- 阶段三：LLM 分析 ----
         await self._notify(db, task, ResearchStatus.ANALYZING.value,
@@ -354,7 +355,8 @@ class ResearchEngine:
                 f"搜索关键词（{i + 1}/{n}）：{kw.keyword}",
                 P_COLLECT_START + (P_COLLECT_END - P_COLLECT_START) * i / n,
             )
-            section = await self._collect_keyword(task, kw, params, cookies.get(kw.platform))
+            section = await self._collect_keyword(task, kw, params, cookies.get(kw.platform),
+                                                  llm, llm_ready)
             sections.append(section)
             kw.last_researched_at = beijing_now()
             kw.extra_info = {
@@ -375,7 +377,7 @@ class ResearchEngine:
                 P_COMMENT_START + (P_COMMENT_END - P_COMMENT_START) * i / n,
             )
             await self._collect_keyword_comments(db, task, section, params,
-                                                 cookies.get(kw.platform), llm, llm_ready)
+                                                 cookies.get(kw.platform))
 
         # ---- 阶段三：LLM 分析 ----
         await self._notify(db, task, ResearchStatus.ANALYZING.value,
@@ -404,8 +406,13 @@ class ResearchEngine:
     # ------------------------------------------------------------------
 
     async def _collect_competitor(self, comp: Competitor, params: dict,
-                                  cookie_str: str | None) -> dict:
-        """抓取竞品主页信息 + 近期视频列表，构建 section 骨架。"""
+                                  cookie_str: str | None,
+                                  llm: LlmClient, llm_ready: bool) -> dict:
+        """抓取竞品主页信息 + 近期视频列表，构建 section 骨架。
+
+        LLM 筛选开启且配置了竞品备注名时，多抓 3 倍候选（封顶 +20），
+        筛掉不相关视频后再截断到目标条数，保证筛选后数量仍然足额。
+        """
         section: dict = {
             "competitor_id": comp.id,
             "index": 0,  # build_report 前统一编号
@@ -431,11 +438,15 @@ class ResearchEngine:
             # 引擎内部使用（不进报告）
             "_comments": [],
         }
+        max_videos = int(params.get("max_videos_per_competitor", 8))
+        focus = (comp.name or "").strip()
+        llm_filter_on = bool(params.get("llm_filter_videos", True)) and llm_ready and focus
         try:
             adapter = get_adapter(comp.platform)
             kwargs = dict(
                 platform_uid=comp.platform_uid,
-                max_items=int(params.get("max_videos_per_competitor", 8)),
+                # 筛选开启时多抓候选：筛掉不相关后仍能截满目标条数
+                max_items=min(max_videos * 3, max_videos + 20) if llm_filter_on else max_videos,
                 headless=True,
                 cookie_str=cookie_str,
                 date_from=params.get("date_from"),
@@ -453,6 +464,13 @@ class ResearchEngine:
             section["follower_count"] = creator_info.follower_count or 0
             videos = [_item_to_video_dict(v) for v in items]
             videos.sort(key=lambda v: v["create_time"] or "", reverse=True)
+            if llm_filter_on and len(videos) > 1:
+                videos = await self._filter_videos_by_llm(llm, focus, videos, section)
+                if len(videos) < max_videos:
+                    section["warnings"].append(
+                        f"LLM 筛选后仅剩 {len(videos)} 条相关视频，不足目标 {max_videos} 条"
+                        f"（该账号近期相关内容已用尽）")
+                videos = videos[:max_videos]
             section["videos"] = videos
             section["video_count"] = len(videos)
             section["avg_likes"] = _avg([v["likes"] for v in videos])
@@ -467,13 +485,12 @@ class ResearchEngine:
         return section
 
     async def _collect_comments(self, db, task: ResearchTask, comp: Competitor,
-                                section: dict, params: dict, cookie_str: str | None,
-                                llm: LlmClient, llm_ready: bool):
+                                section: dict, params: dict, cookie_str: str | None):
         """选视频爬评论 + 截图，评论落库 ResearchComment。
 
         top_videos_for_comments：-1=全部视频，0=不爬，>0=互动量 Top N；
         max_comments_per_video：-1=全量爬取，>0=每视频上限。
-        爬取前可用 LLM 按标题筛掉与调研主题不相关的视频。
+        视频已在采集阶段完成 LLM 相关性筛选，此处不再筛。
         """
         videos = section.get("videos") or []
         top_k = int(params.get("top_videos_for_comments", -1))
@@ -482,10 +499,6 @@ class ResearchEngine:
             if not videos:
                 section["warnings"].append("无视频可爬评论（时间范围内无内容或抓取失败）")
             return
-
-        focus = (comp.name or "").strip()
-        videos = await self._filter_videos_by_llm(
-            llm, llm_ready, focus, videos, params, section)
 
         ranked = sorted(videos, key=lambda v: v["likes"] + v["comments"], reverse=True)
         picked = ranked if top_k < 0 else ranked[:top_k]
@@ -602,41 +615,46 @@ class ResearchEngine:
             db.add_all(rows)
             await db.commit()
 
-    async def _filter_videos_by_llm(self, llm: LlmClient, llm_ready: bool,
-                                    focus: str, videos: list[dict],
-                                    params: dict, section: dict) -> list[dict]:
-        """爬取前用 LLM 按标题筛选与调研主题相关的视频。
+    LLM_FILTER_BATCH = 25
 
-        focus 为空、LLM 未配置、开关关闭或调用失败时原样返回（不阻断）；
-        LLM 判定全部不相关时保守保留全部。剔除数记入 section 供报告展示。
+    async def _filter_videos_by_llm(self, llm: LlmClient, focus: str,
+                                    videos: list[dict], section: dict) -> list[dict]:
+        """按批送 LLM 筛选与调研主题相关的视频（标题+作者昵称）。
+
+        单批失败/解析失败/全不相关时保守保留该批，不阻断；
+        剔除总数记入 section["llm_filtered_out"] 供报告展示。
         """
-        if not params.get("llm_filter_videos", True):
-            return videos
-        if not llm_ready or not focus or len(videos) < 2:
-            return videos
+        kept_total: list[dict] = []
+        removed = 0
+        for start in range(0, len(videos), self.LLM_FILTER_BATCH):
+            batch = videos[start:start + self.LLM_FILTER_BATCH]
+            titles = [(i, v.get("title") or "", v.get("author_nickname") or "")
+                      for i, v in enumerate(batch, 1)]
+            try:
+                system, user = build_video_filter_prompt(focus, titles)
+                text = await self._chat_with_retry(llm, system, user, retries=2)
+            except Exception as e:
+                logger.warning(f"LLM video filter failed: {e}")
+                section["warnings"].append("LLM 视频筛选调用失败，该批视频已保留")
+                kept_total.extend(batch)
+                continue
 
-        titles = [(i, v.get("title") or "") for i, v in enumerate(videos, 1)]
-        try:
-            system, user = build_video_filter_prompt(focus, titles)
-            text = await self._chat_with_retry(llm, system, user, retries=2)
-        except Exception as e:
-            logger.warning(f"LLM video filter failed: {e}")
-            section["warnings"].append("LLM 视频筛选失败，已保留全部视频")
-            return videos
+            keep = parse_keep_indexes(text, valid={i for i, _, _ in titles})
+            if keep is None:
+                section["warnings"].append("LLM 视频筛选结果解析失败，该批视频已保留")
+                kept_total.extend(batch)
+                continue
+            if not keep:
+                section["warnings"].append("LLM 判定该批视频均与主题不相关，已保守保留")
+                kept_total.extend(batch)
+                continue
+            kept_total.extend(v for i, v in enumerate(batch, 1) if i in keep)
+            removed += len(batch) - len(keep)
 
-        keep = parse_keep_indexes(text, valid={i for i, _ in titles})
-        if keep is None:
-            section["warnings"].append("LLM 视频筛选结果解析失败，已保留全部视频")
-            return videos
-        if not keep:
-            section["warnings"].append("LLM 判定全部视频与主题不相关，已保留全部视频")
-            return videos
-        kept = [v for i, v in enumerate(videos, 1) if i in keep]
-        removed = len(videos) - len(kept)
         if removed:
             logger.info(f"LLM filter: removed {removed}/{len(videos)} videos for '{focus}'")
         section["llm_filtered_out"] = removed
-        return kept
+        return kept_total
 
     async def _crawl_and_store_danmakus(self, db, task: ResearchTask, owner_id: int,
                                         picked: list[dict], params: dict, cred,
@@ -738,8 +756,9 @@ class ResearchEngine:
             section["warnings"].append("无评论数据，评论区洞察跳过")
 
     async def _collect_keyword(self, task: ResearchTask, kw: ResearchKeyword,
-                               params: dict, cookie_str: str | None) -> dict:
-        """关键词搜索头部视频，构建赛道 section。"""
+                               params: dict, cookie_str: str | None,
+                               llm: LlmClient, llm_ready: bool) -> dict:
+        """关键词搜索头部视频，构建赛道 section（含 LLM 相关性筛选）。"""
         section: dict = {
             "keyword_id": kw.id,
             "index": 0,
@@ -810,6 +829,17 @@ class ResearchEngine:
                 section["warnings"].append(
                     f"时间范围内仅命中 {len(raw)} 条视频（候选 {before} 条，"
                     f"可放宽时间范围或加大搜索翻页深度）")
+
+        # LLM 相关性筛选放在截断之前：先剔除不相关候选，再取 Top N，
+        # 剔除导致数量不足时自然由池内其余相关视频回补
+        if (params.get("llm_filter_videos", True) and llm_ready
+                and len(raw) > 1 and kw.keyword):
+            raw = await self._filter_videos_by_llm(
+                llm, f"关键词「{kw.keyword}」的赛道内容", raw, section)
+            if len(raw) < max_videos:
+                section["warnings"].append(
+                    f"LLM 筛选后仅剩 {len(raw)} 条相关视频，不足目标 {max_videos} 条"
+                    f"（相关候选已用尽，可加大搜索翻页深度扩大候选池）")
         raw = raw[:max_videos]
 
         videos = [{
@@ -855,13 +885,12 @@ class ResearchEngine:
         return section
 
     async def _collect_keyword_comments(self, db, task: ResearchTask, section: dict,
-                                        params: dict, cookie_str: str | None,
-                                        llm: LlmClient, llm_ready: bool):
+                                        params: dict, cookie_str: str | None):
         """关键词模式：视频爬评论 + 截图，评论落库。
 
         top_videos_for_comments：-1=全部视频，0=不爬，>0=互动量 Top N；
         max_comments_per_video：-1=全量爬取，>0=每视频上限。
-        爬取前用 LLM 按标题筛掉与赛道关键词不相关的搜索结果。
+        视频已在采集阶段完成 LLM 相关性筛选，此处不再筛。
         """
         videos = section.get("videos") or []
         top_k = int(params.get("top_videos_for_comments", -1))
@@ -870,10 +899,6 @@ class ResearchEngine:
             if not videos:
                 section["warnings"].append("关键词下无视频，评论与截图跳过")
             return
-
-        focus = f"关键词「{section.get('keyword', '')}」的赛道内容"
-        videos = await self._filter_videos_by_llm(
-            llm, llm_ready, focus, videos, params, section)
 
         ranked = sorted(videos, key=lambda v: v["likes"] + v["comments"], reverse=True)
         picked = ranked if top_k < 0 else ranked[:top_k]

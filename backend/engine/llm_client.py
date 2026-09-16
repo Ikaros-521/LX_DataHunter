@@ -207,26 +207,34 @@ def build_comment_insight_prompt(creator_desc: str, comments_text: str) -> tuple
     return system, user
 
 
-def build_video_filter_prompt(focus: str, titles: list[tuple[int, str]]) -> tuple[str, str]:
+def build_video_filter_prompt(focus: str,
+                              titles: list[tuple[int, str, str]]) -> tuple[str, str]:
     """调研前视频相关性筛选 (system, user) prompt。
 
     focus 为调研主题（关键词模式=赛道关键词；账号模式=竞品备注名）；
-    titles 为 [(编号, 视频标题)]。要求 LLM 返回 {"keep": [编号]} JSON，
+    titles 为 [(编号, 视频标题, 作者昵称)]。要求 LLM 返回 {"keep": [...]} JSON，
     仅保留与主题相关的视频，剔除蹭词/无关内容。
     """
     system = (
-        "你是内容调研助手，负责从搜索/账号视频列表中筛选与调研主题"
-        "相关的视频。判断仅基于标题：蹭热词但主题不符、纯娱乐无关内容、"
-        "与主题无关的生活记录等都应剔除；标题含义模糊时保守保留。"
-        "只输出 JSON，不要输出其他内容。"
+        "你是资深内容运营，负责判断视频与调研主题的相关性。判断标准：\n"
+        "1. 视频主体内容应与主题同品类、同场景或面向同类受众；\n"
+        "2. 仅标题蹭到关键词但内容方向不同的（蹭词）应剔除；\n"
+        "3. 与主题无关的纯娱乐、八卦、生活记录、其他品类内容应剔除；\n"
+        "4. 标题信息不足以判断时保留（宁可多留，交给后续深度分析甄别）；\n"
+        "5. 作者昵称通常反映账号定位，可作为辅助信号。\n"
+        "先逐条思考每条视频与主题的关系，再给结论；最终只输出 JSON。"
     )
-    lines = "\n".join(f"{idx} | {title[:60]}" for idx, title in titles)
+    lines = "\n".join(
+        f"{idx} | {title[:60] or '(无标题)'} | {author[:30]}" for idx, title, author in titles)
     user = (
         f"调研主题：{focus}\n\n"
-        f"候选视频列表（编号 | 标题）：\n{lines}\n\n"
-        '请返回与主题相关的视频编号，格式：{"keep": [编号, 编号, ...]，'
-        '"reason": "一句话剔除理由"}\n'
-        "只输出该 JSON。"
+        f"候选视频（编号 | 标题 | 作者）：\n{lines}\n\n"
+        "判定示例（主题=AI剪辑工具赛道）：\n"
+        "- 保留「3款AI剪辑软件实测，新手也能剪出电影感」：直接评测主题品类；\n"
+        "- 剔除「AI帮我写的辞职信火了」：仅蹭AI热词，与剪辑工具无关。\n\n"
+        '请返回 JSON：{"keep": [相关视频的编号...], '
+        '"drop_reasons": {"被剔除编号": "一句话原因", ...}}\n'
+        "keep 必须涵盖所有你判断为相关的编号；只输出该 JSON。"
     )
     return system, user
 
