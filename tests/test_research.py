@@ -2,9 +2,13 @@
 from backend.engine.comment_crawler import (
     parse_bilibili_reply, parse_douyin_comment_payload,
 )
-from backend.engine.competitor_discovery import parse_douyin_search_payload
+from backend.engine.competitor_discovery import (
+    parse_bilibili_search_videos, parse_douyin_search_payload,
+)
 from backend.api.competitors import parse_platform_uid
-from backend.engine.report_builder import _fmt_int, build_report, sanitize_report_title
+from backend.engine.report_builder import (
+    _fmt_int, build_keyword_report, build_report, sanitize_report_title,
+)
 
 
 # ---- parse_platform_uid ----
@@ -125,6 +129,33 @@ def test_parse_douyin_search_payload_empty():
     assert parse_douyin_search_payload({}) == []
 
 
+def test_parse_bilibili_search_videos():
+    data = {
+        "result": [
+            {
+                "aid": 113700000001,
+                "mid": 946974,
+                "author": "影视飓风",
+                "title": '如何用<em class="keyword">AI剪辑</em>提升效率',
+                "arcurl": "http://www.bilibili.com/video/av113700000001",
+                "play": 250000, "review": 1200, "like": 18000,
+                "pubdate": 1788699600,
+            },
+            {"mid": 1},  # 无 aid 的脏数据应被跳过
+        ],
+    }
+    videos = parse_bilibili_search_videos(data)
+    assert len(videos) == 1
+    v = videos[0]
+    assert v["content_id"] == "113700000001"
+    assert v["title"] == "如何用AI剪辑提升效率"  # 高亮标签已剥离
+    assert v["author_uid"] == "946974"
+    assert v["plays"] == 250000
+    assert v["comments"] == 1200
+    assert v["pub_ts"] == 1788699600
+    assert v["url"].startswith("http://www.bilibili.com/video/av")
+
+
 # ---- 报告拼装 ----
 
 def _sample_section(index=1):
@@ -210,6 +241,76 @@ def test_build_report_empty_videos():
     md = build_report("空", "2026-09-15 12:00", {}, [s])
     assert "未抓取到视频" in md
     assert "*（未抓取到评论）*" not in md  # top_comments 为空时不输出该节
+
+
+def _sample_keyword_section(index=1):
+    return {
+        "index": index,
+        "keyword": "AI剪辑",
+        "platform": "bilibili",
+        "videos": [{
+            "title": "爆款剪辑教程", "url": "https://www.bilibili.com/video/av1",
+            "create_time": "2026-09-10", "plays": 250000, "likes": 18000,
+            "comments": 1200, "shares": 0, "collects": 0, "tags": [],
+            "content_id": "1", "author_nickname": "科技阁",
+            "author_uid": "96434081", "author_homepage": "https://space.bilibili.com/96434081",
+        }],
+        "video_count": 1,
+        "avg_plays": 250000, "avg_likes": 18000, "avg_comments": 1200,
+        "publish_span": "2026-09-10 ~ 2026-09-10",
+        "top_authors": [{
+            "uid": "96434081", "nickname": "科技阁",
+            "homepage": "https://space.bilibili.com/96434081",
+            "video_hits": 1, "total_plays": 250000,
+        }],
+        "comment_count": 2,
+        "search_screenshot": "assets/search_1.png",
+        "video_screenshots": [{
+            "title": "爆款剪辑教程", "url": "https://www.bilibili.com/video/av1",
+            "screenshot": "assets/kw1_video_1.png",
+        }],
+        "top_comments": [{
+            "user_nickname": "用户A", "text": "求教程", "likes": 99,
+            "ip_location": "北京", "create_time": "2026-09-11",
+        }],
+        "content_analysis": "## 赛道概况\n测试",
+        "comment_insight": "## 口碑倾向\n好评",
+        "warnings": ["抖音未配置 Cookie"],
+    }
+
+
+def test_build_keyword_report_structure():
+    md = build_keyword_report(
+        title="AI 赛道调研",
+        generated_at="2026-09-16 09:00",
+        params={"max_videos_per_keyword": 15, "max_search_pages": 2,
+                "top_videos_for_comments": 5, "max_comments_per_video": 50},
+        sections=[_sample_keyword_section(1)],
+        market_overview="## 市场格局\n测试概览",
+        trigger_type="manual",
+    )
+    assert "# 关键词赛道调研报告：AI 赛道调研" in md
+    assert "## 一、市场概览" in md and "测试概览" in md
+    assert "## 二、赛道总览" in md
+    assert '### 1. 关键词「AI剪辑」（B站）' in md
+    assert "#### 头部内容" in md
+    assert "[科技阁](https://space.bilibili.com/96434081)" in md
+    assert "#### 活跃作者榜" in md
+    assert "#### 赛道内容分析" in md and "测试" in md
+    assert "#### 用户评论洞察（抓取 2 条评论）" in md
+    assert "![「AI剪辑」搜索结果](assets/search_1.png)" in md
+    assert "25.0万" in md
+    assert "手动触发" in md
+
+
+def test_build_keyword_report_empty():
+    s = _sample_keyword_section()
+    s["videos"] = []
+    s["video_count"] = 0
+    s["top_authors"] = []
+    md = build_keyword_report("空", "2026-09-16", {}, [s])
+    assert "未搜索到视频" in md
+    assert "#### 活跃作者榜" not in md  # 空作者榜不输出该章节（数据说明文案除外）
 
 
 def test_sanitize_report_title():

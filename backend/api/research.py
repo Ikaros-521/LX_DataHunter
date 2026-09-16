@@ -1,20 +1,24 @@
-"""竞品调研任务 API：创建/查询/删除 + 报告文件服务 + 定时配置。"""
+"""竞品调研任务 API：创建/查询/删除 + 报告文件服务 + 定时配置 + 关键词管理。"""
 import logging
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse
 from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
 from backend.database import get_db
-from backend.models import Competitor, ResearchComment, ResearchSchedule, ResearchTask
+from backend.models import (
+    Competitor, ResearchComment, ResearchKeyword, ResearchSchedule, ResearchTask,
+)
 from backend.schemas import (
-    MessageResponse, ResearchCreateRequest, ResearchListResponse,
-    ResearchScheduleResponse, ResearchScheduleUpsert, ResearchTaskResponse,
+    MessageResponse, ResearchCreateRequest, ResearchKeywordCreate,
+    ResearchKeywordListResponse, ResearchKeywordResponse,
+    ResearchKeywordUpdate, ResearchListResponse, ResearchScheduleResponse,
+    ResearchScheduleUpsert, ResearchTaskResponse,
 )
 from backend.engine.research_engine import research_engine
 from backend.engine.report_builder import sanitize_report_title
@@ -27,11 +31,14 @@ def _task_response(task: ResearchTask) -> dict:
     return {
         "id": task.id,
         "title": task.title,
+        "mode": task.mode or "accounts",
         "status": task.status,
         "stage": task.stage,
         "progress": task.progress,
         "competitor_ids": task.competitor_ids or [],
-        "competitor_count": len(task.competitor_ids or []),
+        "keyword_ids": task.keyword_ids or [],
+        "competitor_count": (len(task.competitor_ids or []) if (task.mode or "accounts") == "accounts"
+                             else len(task.keyword_ids or [])),
         "params": task.params or {},
         "market_overview": task.market_overview or "",
         "markdown_path": task.markdown_path or "",
@@ -49,30 +56,47 @@ def _task_dir(task_id: int, title: str) -> Path:
 
 async def start_research(
     db: AsyncSession,
-    competitor_ids: list[int],
+    ids: list[int],
     params: dict,
     title: str = "",
     trigger_type: str = "manual",
+    mode: str = "accounts",
 ) -> ResearchTask:
-    """创建调研任务并启动（供 API 与定时调度共用）。"""
-    result = await db.execute(
-        select(Competitor).where(Competitor.id.in_(competitor_ids), Competitor.enabled == True)
-        .order_by(Competitor.id)
-    )
-    competitors = result.scalars().all()
-    if not competitors:
-        raise HTTPException(400, "没有可用的竞品（ids 无效或均已停用）")
-    valid_ids = [c.id for c in competitors]
+    """创建调研任务并启动（供 API 与定时调度共用）。
+
+    mode=accounts 时 ids 为 competitor id；mode=keyword 时为 keyword id。
+    """
+    if mode == "keyword":
+        result = await db.execute(
+            select(ResearchKeyword).where(
+                ResearchKeyword.id.in_(ids), ResearchKeyword.enabled == True)
+            .order_by(ResearchKeyword.id)
+        )
+        targets = result.scalars().all()
+    else:
+        result = await db.execute(
+            select(Competitor).where(Competitor.id.in_(ids), Competitor.enabled == True)
+            .order_by(Competitor.id)
+        )
+        targets = result.scalars().all()
+    if not targets:
+        raise HTTPException(400, "没有可用的调研对象（ids 无效或均已停用）")
+    valid_ids = [t.id for t in targets]
 
     if not title:
-        names = "、".join((c.name or c.nickname or c.platform_uid) for c in competitors[:3])
-        suffix = "等" if len(competitors) > 3 else ""
+        if mode == "keyword":
+            names = "、".join(t.keyword for t in targets[:3])
+        else:
+            names = "、".join((t.name or t.nickname or t.platform_uid) for t in targets[:3])
+        suffix = "等" if len(targets) > 3 else ""
         title = f"{datetime.now().strftime('%Y%m%d')} {names}{suffix}"
 
     task = ResearchTask(
         title=title,
+        mode=mode,
         status="pending",
-        competitor_ids=valid_ids,
+        competitor_ids=valid_ids if mode == "accounts" else [],
+        keyword_ids=valid_ids if mode == "keyword" else [],
         params=params,
         trigger_type=trigger_type,
     )
@@ -81,21 +105,30 @@ async def start_research(
     await db.refresh(task)
 
     research_engine.submit(task.id)
-    logger.info(f"Research task started: id={task.id}, competitors={valid_ids}, trigger={trigger_type}")
+    logger.info(f"Research task started: id={task.id}, mode={mode}, ids={valid_ids}, "
+                f"trigger={trigger_type}")
     return task
 
 
 @router.post("", response_model=ResearchTaskResponse, status_code=202)
 async def create_research(body: ResearchCreateRequest, db: AsyncSession = Depends(get_db)):
+    mode = body.mode if body.mode in ("accounts", "keyword") else "accounts"
+    ids = body.keyword_ids if mode == "keyword" else body.competitor_ids
+    if not ids:
+        raise HTTPException(400, f"mode={mode} 需要提供对应的 id 列表")
+
     params = {
+        "mode": mode,
         "date_from": body.date_from,
         "date_to": body.date_to,
         "max_videos_per_competitor": body.max_videos_per_competitor,
         "top_videos_for_comments": body.top_videos_for_comments,
         "max_comments_per_video": body.max_comments_per_video,
+        "max_videos_per_keyword": body.max_videos_per_keyword,
+        "max_search_pages": body.max_search_pages,
     }
-    task = await start_research(db, body.competitor_ids, params,
-                                title=body.title, trigger_type="manual")
+    task = await start_research(db, ids, params, title=body.title,
+                                trigger_type="manual", mode=mode)
     return _task_response(task)
 
 
@@ -118,6 +151,63 @@ async def get_schedule(db: AsyncSession = Depends(get_db)):
         await db.commit()
         await db.refresh(sched)
     return sched
+
+
+# ---- 调研关键词管理（mode=keyword 的数据源）----
+
+@router.get("/keywords", response_model=ResearchKeywordListResponse)
+async def list_keywords(page: int = 1, page_size: int = 100,
+                        db: AsyncSession = Depends(get_db)):
+    total = (await db.execute(select(func.count(ResearchKeyword.id)))).scalar() or 0
+    stmt = (select(ResearchKeyword).order_by(desc(ResearchKeyword.id))
+            .offset((page - 1) * page_size).limit(page_size))
+    rows = (await db.execute(stmt)).scalars().all()
+    return {"total": total, "items": rows}
+
+
+@router.post("/keywords", response_model=ResearchKeywordResponse, status_code=201)
+async def add_keyword(body: ResearchKeywordCreate, db: AsyncSession = Depends(get_db)):
+    keyword = body.keyword.strip()
+    if not keyword:
+        raise HTTPException(400, "关键词不能为空")
+    dup = await db.execute(
+        select(ResearchKeyword).where(
+            ResearchKeyword.keyword == keyword,
+            ResearchKeyword.platform == body.platform.value,
+        )
+    )
+    if dup.scalar_one_or_none():
+        raise HTTPException(409, f"关键词已存在：{keyword}（{body.platform.value}）")
+    kw = ResearchKeyword(keyword=keyword, platform=body.platform.value, note=body.note)
+    db.add(kw)
+    await db.commit()
+    await db.refresh(kw)
+    return kw
+
+
+@router.put("/keywords/{keyword_id}", response_model=ResearchKeywordResponse)
+async def update_keyword(keyword_id: int, body: ResearchKeywordUpdate,
+                         db: AsyncSession = Depends(get_db)):
+    kw = await db.get(ResearchKeyword, keyword_id)
+    if not kw:
+        raise HTTPException(404, f"Keyword not found: id={keyword_id}")
+    if body.note is not None:
+        kw.note = body.note
+    if body.enabled is not None:
+        kw.enabled = body.enabled
+    await db.commit()
+    await db.refresh(kw)
+    return kw
+
+
+@router.delete("/keywords/{keyword_id}")
+async def delete_keyword(keyword_id: int, db: AsyncSession = Depends(get_db)):
+    kw = await db.get(ResearchKeyword, keyword_id)
+    if not kw:
+        raise HTTPException(404, f"Keyword not found: id={keyword_id}")
+    await db.delete(kw)
+    await db.commit()
+    return {"message": f"Deleted keyword id={keyword_id}"}
 
 
 @router.put("/schedule", response_model=ResearchScheduleResponse)

@@ -471,9 +471,15 @@ export interface DiscoveredCompetitor {
   sample_titles: string[]; homepage_url: string;
 }
 
+export interface ResearchKeyword {
+  id: number; keyword: string; platform: string; note: string;
+  enabled: boolean; last_researched_at: string | null;
+  extra_info: Record<string, any>; created_at: string; updated_at: string;
+}
+
 export interface ResearchTask {
-  id: number; title: string; status: string; stage: string; progress: number;
-  competitor_ids: number[]; competitor_count: number;
+  id: number; title: string; mode: string; status: string; stage: string; progress: number;
+  competitor_ids: number[]; keyword_ids: number[]; competitor_count: number;
   params: Record<string, any>; market_overview: string; markdown_path: string;
   trigger_type: string; error_message: string;
   created_at: string; started_at: string | null; finished_at: string | null;
@@ -548,14 +554,49 @@ export function useResearchDetail(id: number | null) {
   });
 }
 
+export function useResearchKeywords() {
+  return useQuery<PaginatedResponse<ResearchKeyword>>({
+    queryKey: ['research', 'keywords'],
+    queryFn: () => client.get('/research/keywords', { params: { page_size: 100 } }).then(r => r.data),
+  });
+}
+
+export function useAddResearchKeyword() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { keyword: string; platform: string; note?: string }) =>
+      client.post('/research/keywords', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['research', 'keywords'] }),
+  });
+}
+
+export function useUpdateResearchKeyword() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: number; note?: string; enabled?: boolean }) =>
+      client.put(`/research/keywords/${id}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['research', 'keywords'] }),
+  });
+}
+
+export function useDeleteResearchKeyword() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => client.delete(`/research/keywords/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['research', 'keywords'] }),
+  });
+}
+
 export function useCreateResearch() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: {
-      title?: string; competitor_ids: number[];
+      title?: string; mode?: string;
+      competitor_ids?: number[]; keyword_ids?: number[];
       date_from?: string | null; date_to?: string | null;
       max_videos_per_competitor?: number; top_videos_for_comments?: number;
       max_comments_per_video?: number;
+      max_videos_per_keyword?: number; max_search_pages?: number;
     }) => client.post('/research', body).then(r => r.data as ResearchTask),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['research'] }),
   });

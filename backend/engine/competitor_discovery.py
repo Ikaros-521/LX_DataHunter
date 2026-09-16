@@ -143,8 +143,8 @@ async def _fill_bilibili_followers(candidates: list[DiscoveredAccount]):
 # --------------------------------------------------------------------------
 
 def parse_douyin_search_payload(data: dict) -> list[dict]:
-    """解析抖音搜索 XHR JSON，返回 [{sec_uid, nickname, signature,
-    follower_count, desc, create_time, plays}]（纯函数，便于单测）。"""
+    """解析抖音搜索 XHR JSON，返回 [{aweme_id, sec_uid, nickname, signature,
+    follower_count, desc, create_time, plays, likes, comments}]（纯函数，便于单测）。"""
     out: list[dict] = []
     for block in data.get("data") or []:
         if not isinstance(block, dict):
@@ -159,6 +159,7 @@ def parse_douyin_search_payload(data: dict) -> list[dict]:
                 continue
             stats = info.get("statistics") or {}
             out.append({
+                "aweme_id": str(info.get("aweme_id", "") or aweme.get("aweme_id", "") or ""),
                 "sec_uid": sec_uid,
                 "nickname": author.get("nickname", "") or "",
                 "signature": author.get("signature", "") or "",
@@ -166,6 +167,8 @@ def parse_douyin_search_payload(data: dict) -> list[dict]:
                 "desc": info.get("desc", "") or "",
                 "create_time": int(info.get("create_time", 0) or 0),
                 "plays": int(stats.get("play_count", 0) or 0),
+                "likes": int(stats.get("digg_count", 0) or 0),
+                "comments": int(stats.get("comment_count", 0) or 0),
             })
     return out
 
@@ -295,3 +298,207 @@ async def discover_douyin(
     candidates = _merge_hits(accounts, max_items)
     logger.info(f"Douyin discovery '{keyword}': {len(candidates)} accounts")
     return candidates
+
+
+# --------------------------------------------------------------------------
+# 视频级搜索（关键词赛道调研模式用）
+# --------------------------------------------------------------------------
+
+def parse_bilibili_search_videos(data: dict) -> list[dict]:
+    """解析 B站 search_by_type(VIDEO) 返回，输出统一视频 dict（纯函数）。
+
+    [{content_id, title, url, author_nickname, author_uid, plays, likes,
+      comments, pub_ts}]
+    """
+    out: list[dict] = []
+    for v in (data or {}).get("result") or []:
+        if not isinstance(v, dict):
+            continue
+        aid = str(v.get("aid", "") or "")
+        if not aid:
+            continue
+        title = (v.get("title") or "").replace('<em class="keyword">', '').replace("</em>", "")
+        out.append({
+            "content_id": aid,
+            "title": title,
+            "url": v.get("arcurl") or f"https://www.bilibili.com/video/av{aid}",
+            "author_nickname": v.get("author", "") or "",
+            "author_uid": str(v.get("mid", "") or ""),
+            "plays": int(v.get("play", 0) or 0),
+            "likes": int(v.get("like", 0) or 0),
+            "comments": int(v.get("review", 0) or 0),
+            "pub_ts": int(v.get("pubdate", 0) or 0),
+        })
+    return out
+
+
+async def search_bilibili_videos(keyword: str, max_videos: int = 15,
+                                 max_pages: int = 2) -> list[dict]:
+    """B站关键词搜视频（翻页），按播放量降序返回前 max_videos 条（去重）。"""
+    from bilibili_api import search as bili_search, sync
+    from bilibili_api.search import SearchObjectType
+
+    all_videos: list[dict] = []
+    seen: set[str] = set()
+    for page in range(1, max_pages + 1):
+        try:
+            data = sync(bili_search.search_by_type(
+                keyword, search_type=SearchObjectType.VIDEO, page=page,
+            ))
+        except Exception as e:
+            logger.warning(f"Bilibili video search page {page} failed for '{keyword}': {e}")
+            break
+        page_videos = parse_bilibili_search_videos(data)
+        if not page_videos:
+            break
+        for v in page_videos:
+            if v["content_id"] not in seen:
+                seen.add(v["content_id"])
+                all_videos.append(v)
+        if page < max_pages:
+            await asyncio.sleep(1.2)
+
+    all_videos.sort(key=lambda v: v["plays"], reverse=True)
+    logger.info(f"Bilibili video search '{keyword}': {len(all_videos)} videos "
+                f"-> top {min(max_videos, len(all_videos))}")
+    return all_videos[:max_videos]
+
+
+async def search_douyin_videos(
+    keyword: str,
+    cookie_str: str | None = None,
+    max_videos: int = 15,
+    max_pages: int = 2,
+    screenshot_dir=None,
+    headless: bool = True,
+) -> tuple[list[dict], str]:
+    """抖音关键词搜视频（Playwright + XHR 拦截，需登录）。
+
+    返回 (按播放/点赞降序的视频列表, 搜索结果页截图文件名——screenshot_dir
+    为 None 时为空)。视频 dict 字段同 parse_bilibili_search_videos，
+    另含 author_homepage。
+    """
+    from playwright.async_api import async_playwright
+    from .hot_crawler import _handle_captcha, _is_logged_in
+
+    url = f"https://www.douyin.com/search/{keyword}?type=general"
+    scroll_rounds = min(max_pages * 3, 10)
+    search_shot = ""
+    if screenshot_dir:
+        from pathlib import Path
+        Path(screenshot_dir).mkdir(parents=True, exist_ok=True)
+
+    async with async_playwright() as p:
+        launch_args: dict = {"headless": headless, "args": ["--no-sandbox", "--disable-setuid-sandbox"]}
+        chrome_exe = next((cp for cp in CHROME_PATHS if os.path.exists(cp)), None)
+        if chrome_exe:
+            launch_args["executable_path"] = chrome_exe
+        browser = await p.chromium.launch(**launch_args)
+        context = await browser.new_context(
+            user_agent=DOUYIN_UA, locale="zh-CN",
+            viewport={"width": 1280, "height": 900},
+        )
+        await context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
+        )
+        if cookie_str:
+            for item in cookie_str.split(";"):
+                item = item.strip()
+                if "=" in item:
+                    k, _, v = item.partition("=")
+                    try:
+                        await context.add_cookies([{
+                            "name": k.strip(), "value": v.strip(),
+                            "domain": ".douyin.com", "path": "/",
+                        }])
+                    except Exception:
+                        pass
+
+        page = await context.new_page()
+        xhr_data: list[dict] = []
+
+        async def on_response(response):
+            if "/aweme/v1/web/search/item" in response.url:
+                try:
+                    xhr_data.append(await response.json())
+                except Exception:
+                    pass
+
+        page.on("response", on_response)
+        try:
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            except Exception as e:
+                logger.warning(f"Douyin search page load incomplete: {e}")
+            await asyncio.sleep(5)
+
+            if not await _handle_captcha(page, headless):
+                logger.warning("Douyin video search aborted: captcha blocked")
+                await browser.close()
+                return [], ""
+            if not await _is_logged_in(page, context, cookie_str):
+                if headless:
+                    logger.warning("Douyin video search needs login cookie")
+                    await browser.close()
+                    return [], ""
+                logger.info("Waiting up to 120s for QR login...")
+                logged = False
+                for _ in range(60):
+                    await asyncio.sleep(2)
+                    if await _is_logged_in(page, context, cookie_str):
+                        logged = True
+                        break
+                if not logged:
+                    await browser.close()
+                    return [], ""
+                await asyncio.sleep(3)
+                try:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                except Exception:
+                    pass
+                await asyncio.sleep(5)
+
+            if screenshot_dir:
+                try:
+                    out = os.path.join(str(screenshot_dir),
+                                       f"search_{_safe_kw(keyword)}.png")
+                    await page.screenshot(path=out)
+                    search_shot = os.path.basename(out)
+                except Exception as e:
+                    logger.warning(f"Search screenshot failed: {e}")
+
+            for _ in range(scroll_rounds):
+                if sum(len(parse_douyin_search_payload(d)) for d in xhr_data) >= max_videos * 2:
+                    break
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await asyncio.sleep(2)
+        finally:
+            await browser.close()
+
+    videos: list[dict] = []
+    seen: set[str] = set()
+    for d in xhr_data:
+        for hit in parse_douyin_search_payload(d):
+            if not hit["aweme_id"] or hit["aweme_id"] in seen:
+                continue
+            seen.add(hit["aweme_id"])
+            videos.append({
+                "content_id": hit["aweme_id"],
+                "title": hit["desc"],
+                "url": f"https://www.douyin.com/video/{hit['aweme_id']}",
+                "author_nickname": hit["nickname"],
+                "author_uid": hit["sec_uid"],
+                "author_homepage": f"https://www.douyin.com/user/{hit['sec_uid']}",
+                "plays": hit["plays"],
+                "likes": hit["likes"],
+                "comments": hit["comments"],
+                "pub_ts": hit["create_time"],
+            })
+    videos.sort(key=lambda v: (v["plays"], v["likes"]), reverse=True)
+    logger.info(f"Douyin video search '{keyword}': {len(videos)} videos")
+    return videos[:max_videos], search_shot
+
+
+def _safe_kw(keyword: str) -> str:
+    import re
+    return re.sub(r'[\\/:*?"<>|\s]+', "_", keyword)[:40]

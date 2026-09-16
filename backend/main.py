@@ -135,6 +135,26 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Failed to backfill enabled_tasks: {e}")
 
+        # ---- 轻量迁移：为 research_tasks 补加 mode / keyword_ids 列 ----
+        try:
+            await conn.execute(
+                sa_text("ALTER TABLE research_tasks ADD COLUMN mode VARCHAR(20) DEFAULT 'accounts'")
+            )
+        except Exception:
+            pass  # 列已存在
+        try:
+            await conn.execute(
+                sa_text("ALTER TABLE research_tasks ADD COLUMN keyword_ids JSON DEFAULT '[]'")
+            )
+        except Exception:
+            pass  # 列已存在
+        try:
+            await conn.execute(
+                sa_text("UPDATE research_tasks SET mode = 'accounts' WHERE mode IS NULL OR mode = ''")
+            )
+        except Exception:
+            pass
+
         # ---- 恢复机制：将上次中断的 running 任务标记为 interrupted ----
         result = await conn.execute(
             select(CrawlSession.id).where(

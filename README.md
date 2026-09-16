@@ -14,7 +14,7 @@
 | **视频下载** | yt-dlp 统一后端 + 抖音专用 Playwright 直链拦截（无水印），异步队列 + 并发控制 + 断点恢复 |
 | **语音识别** | ffmpeg 抽音频 → faster-whisper 本地 ASR（也可切换阿里云在线 ASR），分段 + 全文输出 |
 | **LLM 智能分析** | 三项可独立勾选：内容总结、脚本与制作手法分析、知识点提炼，并行调用 LLM API |
-| **竞品调研** | 竞品账号管理（手动添加/关键词发现）→ 一键或定时调研：抓主页与近期视频、爬爆款视频评论区、页面截图 → LLM 内容策略/评论区洞察/市场对比分析 → 生成自包含 Markdown 报告（截图+视频链接+数据表），在线查看/下载 |
+| **竞品调研** | 双模式：**账号分析**（锁定竞品 UP 主：主页/近期视频/评论区/截图 → 账号内容策略）与**赛道分析**（关键词搜索头部视频 + 活跃作者榜 + 评论区 → 品类竞争格局）；支持手动/定时触发，LLM 生成内容策略、评论区洞察、市场对比，输出自包含 Markdown 报告（截图+视频链接+数据表），在线查看/下载 |
 | **实时进度** | WebSocket 推送爬取、下载、分析、竞品调研全链路实时进度 |
 | **凭证管理** | 集中管理各平台 Cookie，供爬虫和下载器携带登录态请求 |
 | **React 前端** | Ant Design SPA，覆盖仪表盘、创作者列表/详情、爬虫控制台、内容搜索、热门抓取、下载管理、视频分析对比、竞品调研等页面 |
@@ -180,8 +180,9 @@ LX_DataHunter/
 | `download_tasks` | 下载任务状态机（pending → downloading → completed/failed） |
 | `video_analyses` | 视频分析结果（ASR 分段/全文 + 各维度 LLM 分析） |
 | `platform_credentials` | 平台 Cookie 凭证（供爬虫和下载器携带） |
-| `competitors` | 竞品账号（platform + platform_uid 唯一，调研后回填昵称/粉丝数） |
-| `research_tasks` | 竞品调研任务（状态机 + 参数 + 各竞品统计 + 报告路径） |
+| `competitors` | 竞品账号（platform + platform_uid 唯一，调研后回填昵称/粉丝数），账号分析模式数据源 |
+| `research_keywords` | 调研关键词（赛道/品类，keyword + platform 唯一），赛道分析模式数据源 |
+| `research_tasks` | 竞品调研任务（mode=accounts/keyword + 状态机 + 参数 + 各对象统计 + 报告路径） |
 | `research_comments` | 调研抓取的评论快照（按任务/竞品索引，支持跨报告对比） |
 | `research_schedules` | 竞品调研定时配置（单行：interval + 参数覆盖） |
 
@@ -231,15 +232,16 @@ LX_DataHunter/
 
 | Method | Path | 描述 |
 |--------|------|------|
-| GET/POST/PUT/DELETE | `/api/v1/competitors` | 竞品 CRUD（支持主页链接自动解析 uid） |
-| POST | `/api/v1/competitors/discover` | 关键词发现候选竞品（B站纯 API；抖音需登录 Cookie） |
-| POST | `/api/v1/research` | 创建调研任务（202，后台执行） |
+| GET/POST/PUT/DELETE | `/api/v1/competitors` | 竞品账号 CRUD（支持主页链接自动解析 uid） |
+| POST | `/api/v1/competitors/discover` | 关键词发现候选账号（多页深度搜索 + 粉丝/发布时间/命中排序） |
+| GET/POST/PUT/DELETE | `/api/v1/research/keywords` | 调研关键词 CRUD（赛道分析模式数据源） |
+| POST | `/api/v1/research` | 创建调研任务（202，后台执行；`mode=accounts` 账号分析 / `mode=keyword` 赛道分析） |
 | GET | `/api/v1/research` | 调研任务列表 |
 | GET | `/api/v1/research/{id}` | 任务详情（状态/进度） |
 | DELETE | `/api/v1/research/{id}` | 删除任务及报告文件 |
 | GET | `/api/v1/research/{id}/file` | 报告 Markdown（`?download=true` 下载） |
 | GET | `/api/v1/research/{id}/assets/{name}` | 报告截图资源 |
-| GET/PUT | `/api/v1/research/schedule` | 定时调研配置 |
+| GET/PUT | `/api/v1/research/schedule` | 定时调研配置（params.mode 可选 accounts/keyword） |
 | WS | `/ws/research` | 调研进度广播 |
 
 报告输出目录：`output/reports/{task_id}_{title}/report.md`（`assets/` 存截图，已 gitignore）。

@@ -13,7 +13,7 @@ scheduler = AsyncIOScheduler()
 
 async def run_scheduled_research():
     """检查到期的竞品调研定时配置并触发（每个 tick 至多一次）。"""
-    from backend.models import Competitor, ResearchSchedule, ResearchTask
+    from backend.models import Competitor, ResearchKeyword, ResearchSchedule, ResearchTask
     from backend.api.research import start_research
 
     async with AsyncSessionLocal() as db:
@@ -35,24 +35,34 @@ async def run_scheduled_research():
 
         cfg = sched.params or {}
         days = int(cfg.get("days", 30))
+        mode = cfg.get("mode", "accounts")
         params = {
+            "mode": mode,
             "date_from": (beijing_now() - timedelta(days=days)).strftime("%Y-%m-%d"),
             "date_to": None,
             "max_videos_per_competitor": int(cfg.get("max_videos_per_competitor", 8)),
             "top_videos_for_comments": int(cfg.get("top_videos_for_comments", 5)),
             "max_comments_per_video": int(cfg.get("max_comments_per_video", 50)),
+            "max_videos_per_keyword": int(cfg.get("max_videos_per_keyword", 15)),
+            "max_search_pages": int(cfg.get("max_search_pages", 2)),
         }
-        comps = (await db.execute(
-            select(Competitor.id).where(Competitor.enabled == True)
-        )).scalars().all()
+        if mode == "keyword":
+            ids = (await db.execute(
+                select(ResearchKeyword.id).where(ResearchKeyword.enabled == True)
+            )).scalars().all()
+        else:
+            ids = (await db.execute(
+                select(Competitor.id).where(Competitor.enabled == True)
+            )).scalars().all()
 
         try:
-            if comps:
+            if ids:
                 await start_research(
-                    db, list(comps), params,
+                    db, list(ids), params,
                     title=cfg.get("title_prefix", "定时竞品调研") +
                           beijing_now().strftime(" %Y%m%d %H:%M"),
                     trigger_type="scheduled",
+                    mode=mode,
                 )
         except Exception as e:
             logger.error(f"Scheduled research failed to start: {e}")

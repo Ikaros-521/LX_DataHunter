@@ -382,23 +382,59 @@ class DiscoverResponse(BaseModel):
     message: str = ""                   # 异常/降级说明（如抖音未登录）
 
 
+class ResearchKeywordCreate(BaseModel):
+    keyword: str = Field(..., min_length=1, max_length=100, description="赛道/品类关键词，如：AI剪辑")
+    platform: Platform = Field(default=Platform.BILIBILI)
+    note: str = ""
+
+
+class ResearchKeywordUpdate(BaseModel):
+    note: str | None = None
+    enabled: bool | None = None
+
+
+class ResearchKeywordResponse(BaseModel):
+    id: int
+    keyword: str
+    platform: Platform
+    note: str
+    enabled: bool
+    last_researched_at: Optional[datetime] = None
+    extra_info: dict = {}
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ResearchKeywordListResponse(BaseModel):
+    total: int
+    items: list[ResearchKeywordResponse]
+
+
 class ResearchCreateRequest(BaseModel):
     title: str = Field(default="", max_length=255)
-    competitor_ids: list[int] = Field(..., min_length=1, max_length=20)
+    mode: str = Field(default="accounts", description="accounts=竞品账号分析 | keyword=关键词赛道分析")
+    competitor_ids: list[int] = Field(default=[], max_length=20, description="账号模式下调研的竞品 id 列表")
+    keyword_ids: list[int] = Field(default=[], max_length=10, description="关键词模式下调研的关键词 id 列表")
     date_from: str | None = Field(default=None, description="起始日期 YYYY-MM-DD")
     date_to: str | None = Field(default=None, description="截止日期 YYYY-MM-DD")
-    max_videos_per_competitor: int = Field(default=8, ge=1, le=50, description="每竞品抓取的视频数")
-    top_videos_for_comments: int = Field(default=5, ge=0, le=10, description="每竞品爬评论的爆款视频数")
+    max_videos_per_competitor: int = Field(default=8, ge=1, le=50, description="账号模式：每竞品抓取的视频数")
+    top_videos_for_comments: int = Field(default=5, ge=0, le=10, description="爬评论的爆款视频数（账号模式每竞品 / 关键词模式每关键词）")
     max_comments_per_video: int = Field(default=50, ge=1, le=500, description="每视频抓取的评论数")
+    max_videos_per_keyword: int = Field(default=15, ge=1, le=50, description="关键词模式：每关键词取的搜索视频数")
+    max_search_pages: int = Field(default=2, ge=1, le=10, description="关键词模式：搜索翻页深度（B站每页42条）")
 
 
 class ResearchTaskResponse(BaseModel):
     id: int
     title: str
+    mode: str = "accounts"
     status: str
     stage: str
     progress: float
     competitor_ids: list[int] = []
+    keyword_ids: list[int] = []
     competitor_count: int = 0
     params: dict = {}
     market_overview: str = ""

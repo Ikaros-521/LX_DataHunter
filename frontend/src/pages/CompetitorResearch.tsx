@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Badge, Button, Card, DatePicker, Form, Input, InputNumber, Modal, Popconfirm,
-  Progress, Select, Space, Switch, Table, Tabs, Tag, Tooltip, message,
+  Progress, Radio, Select, Space, Switch, Table, Tabs, Tag, Tooltip, message,
 } from 'antd';
 import type { Dayjs } from 'dayjs';
 import type { ColumnsType } from 'antd/es/table';
@@ -10,9 +10,10 @@ import {
   useAddCompetitor, useCompetitors, useDeleteCompetitor,
   useDeleteResearch, useDiscoverCompetitors, useResearchList,
   useResearchSchedule, useUpdateCompetitor, useUpdateResearchSchedule,
-  useCreateResearch,
+  useCreateResearch, useResearchKeywords, useAddResearchKeyword,
+  useUpdateResearchKeyword, useDeleteResearchKeyword,
 } from '../api/queries';
-import type { Competitor, DiscoveredCompetitor } from '../api/queries';
+import type { Competitor, DiscoveredCompetitor, ResearchKeyword } from '../api/queries';
 
 const PLATFORM_OPTIONS = [
   { value: 'bilibili', label: 'B站' },
@@ -264,56 +265,87 @@ function CompetitorsTab() {
 
 function ResearchLauncher() {
   const [form] = Form.useForm();
+  const [mode, setMode] = useState<'accounts' | 'keyword'>('accounts');
   const { data: compData } = useCompetitors();
+  const { data: kwData } = useResearchKeywords();
   const create = useCreateResearch();
 
-  const options = (compData?.items || [])
+  const compOptions = (compData?.items || [])
     .filter(c => c.enabled)
     .map(c => ({
       value: c.id,
       label: `${c.name || c.nickname || c.platform_uid}（${PLATFORM_LABEL[c.platform] || c.platform}）`,
     }));
+  const kwOptions = (kwData?.items || [])
+    .filter(k => k.enabled)
+    .map(k => ({ value: k.id, label: `${k.keyword}（${PLATFORM_LABEL[k.platform] || k.platform}）` }));
 
   const onOk = async () => {
     const v = await form.validateFields();
     const range = v.range as [Dayjs, Dayjs] | undefined;
     await create.mutateAsync({
       title: v.title?.trim() || '',
-      competitor_ids: v.competitor_ids,
+      mode,
+      competitor_ids: mode === 'accounts' ? v.targets : [],
+      keyword_ids: mode === 'keyword' ? v.targets : [],
       date_from: range?.[0]?.format('YYYY-MM-DD') || null,
       date_to: range?.[1]?.format('YYYY-MM-DD') || null,
-      max_videos_per_competitor: v.max_videos,
       top_videos_for_comments: v.top_videos,
       max_comments_per_video: v.max_comments,
+      ...(mode === 'accounts'
+        ? { max_videos_per_competitor: v.max_videos }
+        : { max_videos_per_keyword: v.max_videos, max_search_pages: v.max_pages }),
     });
     message.success('调研已启动，可在下方列表查看进度');
-    form.resetFields(['title', 'competitor_ids', 'range']);
+    form.resetFields(['title', 'targets', 'range']);
   };
+
+  const targetRules = [{ required: true, message: mode === 'accounts' ? '请选择竞品账号' : '请选择关键词' }];
 
   return (
     <Card title="发起竞品调研" size="small" style={{ marginBottom: 16 }}>
       <Form form={form} layout="inline"
-        initialValues={{ max_videos: 8, top_videos: 5, max_comments: 50 }}
+        initialValues={{ max_videos: 8, max_pages: 2, top_videos: 5, max_comments: 50 }}
         style={{ flexWrap: 'wrap', gap: 8 }}>
-        <Form.Item name="competitor_ids" rules={[{ required: true, message: '请选择竞品' }]}>
-          <Select mode="multiple" placeholder="选择竞品（可多选）"
-            options={options} style={{ minWidth: 320 }} allowClear
-            maxTagCount="responsive" />
+        <Form.Item>
+          <Radio.Group value={mode} onChange={e => setMode(e.target.value)}
+            optionType="button" buttonStyle="solid">
+            <Radio.Button value="accounts">账号分析</Radio.Button>
+            <Radio.Button value="keyword">赛道分析（关键词）</Radio.Button>
+          </Radio.Group>
+        </Form.Item>
+        <Form.Item name="targets" rules={targetRules}>
+          {mode === 'accounts' ? (
+            <Select mode="multiple" placeholder="选择竞品账号（可多选）"
+              options={compOptions} style={{ minWidth: 300 }} allowClear
+              maxTagCount="responsive" />
+          ) : (
+            <Select mode="multiple" placeholder="选择调研关键词（可多选）"
+              options={kwOptions} style={{ minWidth: 300 }} allowClear
+              maxTagCount="responsive" notFoundContent={
+                <span style={{ color: '#888' }}>先在「调研对象」页签添加关键词</span>
+              } />
+          )}
         </Form.Item>
         <Form.Item name="range">
-          <DatePicker.RangePicker placeholder={['视频发布起', '视频发布止']} allowEmpty={[true, true]} />
+          <DatePicker.RangePicker placeholder={['发布起', '发布止']} allowEmpty={[true, true]} />
         </Form.Item>
-        <Form.Item name="max_videos" label="每竞品视频数">
-          <InputNumber min={1} max={50} style={{ width: 80 }} />
+        <Form.Item name="max_videos" label={mode === 'accounts' ? '每账号视频数' : '每关键词视频数'}>
+          <InputNumber min={1} max={50} style={{ width: 70 }} />
         </Form.Item>
+        {mode === 'keyword' && (
+          <Form.Item name="max_pages" label="搜索翻页">
+            <InputNumber min={1} max={10} style={{ width: 60 }} />
+          </Form.Item>
+        )}
         <Form.Item name="top_videos" label="爬评论视频数">
-          <InputNumber min={0} max={10} style={{ width: 70 }} />
+          <InputNumber min={0} max={10} style={{ width: 60 }} />
         </Form.Item>
         <Form.Item name="max_comments" label="每视频评论数">
-          <InputNumber min={1} max={500} style={{ width: 80 }} />
+          <InputNumber min={1} max={500} style={{ width: 70 }} />
         </Form.Item>
         <Form.Item name="title">
-          <Input placeholder="报告标题（可选）" style={{ width: 200 }} allowClear maxLength={50} />
+          <Input placeholder="报告标题（可选）" style={{ width: 180 }} allowClear maxLength={50} />
         </Form.Item>
         <Form.Item>
           <Button type="primary" loading={create.isPending} onClick={onOk}>
@@ -378,6 +410,75 @@ function ScheduleCard() {
   );
 }
 
+// ---------- 调研关键词管理 ----------
+
+function KeywordsTab() {
+  const { data, isLoading } = useResearchKeywords();
+  const add = useAddResearchKeyword();
+  const del = useDeleteResearchKeyword();
+  const update = useUpdateResearchKeyword();
+  const [form] = Form.useForm();
+
+  const onAdd = async () => {
+    const v = await form.validateFields();
+    await add.mutateAsync({ keyword: v.keyword.trim(), platform: v.platform });
+    message.success('关键词已添加');
+    form.resetFields(['keyword']);
+  };
+
+  const columns: ColumnsType<ResearchKeyword> = [
+    { title: '关键词', dataIndex: 'keyword', width: 200,
+      render: (v: string) => <Tag color="purple">{v}</Tag> },
+    { title: '平台', dataIndex: 'platform', width: 80,
+      render: (v: string) => PLATFORM_LABEL[v] || v },
+    { title: '最近调研摘要', dataIndex: 'extra_info', ellipsis: true,
+      render: (info: Record<string, any>) => {
+        if (!info || !info.video_count) return '未调研';
+        const authors = (info.top_authors || []).slice(0, 3).join('、');
+        return `头部视频 ${info.video_count} 条，平均播放 ${fmtNum(info.avg_plays)}`
+          + (authors ? `，玩家：${authors}` : '');
+      } },
+    { title: '最近调研', dataIndex: 'last_researched_at', width: 160,
+      render: (v: string | null) => v ? new Date(v).toLocaleString('zh-CN') : '未调研' },
+    { title: '启用', dataIndex: 'enabled', width: 70,
+      render: (v: boolean, r) => (
+        <Switch checked={v} size="small"
+          onChange={checked => update.mutate({ id: r.id, enabled: checked })} />
+      ) },
+    { title: '操作', width: 80,
+      render: (_: any, r) => (
+        <Popconfirm title="删除该关键词？" onConfirm={() => del.mutate(r.id)}>
+          <Button size="small" danger>删除</Button>
+        </Popconfirm>
+      ) },
+  ];
+
+  return (
+    <div>
+      <Card size="small" style={{ marginBottom: 12 }}>
+        <Form form={form} layout="inline" initialValues={{ platform: 'bilibili' }}
+          style={{ gap: 8 }}>
+          <Form.Item name="platform">
+            <Select options={PLATFORM_OPTIONS} style={{ width: 100 }} />
+          </Form.Item>
+          <Form.Item name="keyword"
+            rules={[{ required: true, message: '请输入关键词' }]}>
+            <Input placeholder="赛道/品类关键词，如：AI剪辑、桌面收纳"
+              style={{ width: 280 }} allowClear maxLength={50}
+              onPressEnter={onAdd} />
+          </Form.Item>
+          <Form.Item>
+            <Button type="primary" loading={add.isPending} onClick={onAdd}>添加关键词</Button>
+          </Form.Item>
+        </Form>
+      </Card>
+      <Table<ResearchKeyword> rowKey="id" size="middle" loading={isLoading}
+        dataSource={data?.items || []} columns={columns}
+        pagination={{ pageSize: 10 }} />
+    </div>
+  );
+}
+
 // ---------- 调研报告 Tab ----------
 
 function ReportsTab() {
@@ -389,7 +490,11 @@ function ReportsTab() {
   const columns = [
     { title: 'ID', dataIndex: 'id', width: 60, key: 'id' },
     { title: '标题', dataIndex: 'title', ellipsis: true, key: 'title' },
-    { title: '竞品数', dataIndex: 'competitor_count', width: 80, key: 'competitor_count' },
+    { title: '模式', dataIndex: 'mode', width: 90, key: 'mode',
+      render: (v: string) => v === 'keyword'
+        ? <Tag color="purple">赛道分析</Tag>
+        : <Tag color="blue">账号分析</Tag> },
+    { title: '对象数', dataIndex: 'competitor_count', width: 80, key: 'competitor_count' },
     { title: '状态', dataIndex: 'status', width: 200, key: 'status',
       render: (s: string, r: any) => {
         const meta = STATUS_META[s] || { color: 'default', text: s };
@@ -459,15 +564,31 @@ export default function CompetitorResearch() {
           },
           {
             key: 'competitors',
-            label: '竞品管理',
+            label: '调研对象',
             children: (
-              <>
-                <Space style={{ marginBottom: 12 }}>
-                  <Button type="primary" onClick={() => setAddOpen(true)}>添加竞品</Button>
-                  <Button onClick={() => setDiscoverOpen(true)}>关键词发现</Button>
-                </Space>
-                <CompetitorsTab />
-              </>
+              <Tabs
+                defaultActiveKey="keywords"
+                items={[
+                  {
+                    key: 'keywords',
+                    label: '关键词（赛道分析）',
+                    children: <KeywordsTab />,
+                  },
+                  {
+                    key: 'accounts',
+                    label: '竞品账号（账号分析）',
+                    children: (
+                      <>
+                        <Space style={{ marginBottom: 12 }}>
+                          <Button type="primary" onClick={() => setAddOpen(true)}>添加竞品账号</Button>
+                          <Button onClick={() => setDiscoverOpen(true)}>关键词发现账号</Button>
+                        </Space>
+                        <CompetitorsTab />
+                      </>
+                    ),
+                  },
+                ]}
+              />
             ),
           },
         ]}

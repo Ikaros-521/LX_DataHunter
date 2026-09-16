@@ -202,6 +202,146 @@ def build_report(
     return "\n".join(lines) + "\n"
 
 
+def _keyword_video_table(videos: list[dict]) -> str:
+    if not videos:
+        return "*(该关键词下未搜索到视频)*"
+    header = ("| 发布日期 | 标题 | 作者 | 播放 | 点赞 | 评论 |\n"
+              "|---|---|---|---|---|---|")
+    rows = []
+    for v in videos:
+        ct = (v.get("create_time") or "")[:10] or "-"
+        author = v.get("author_nickname") or "-"
+        home = v.get("author_homepage")
+        author_md = f"[{_cell(author, 16)}]({home})" if home else _cell(author, 16)
+        rows.append(
+            f"| {ct} | {_md_link(v.get('title', ''), v.get('url', ''))} "
+            f"| {author_md} | {_fmt_int(v.get('plays'))} | {_fmt_int(v.get('likes'))} "
+            f"| {_fmt_int(v.get('comments'))} |"
+        )
+    return header + "\n" + "\n".join(rows)
+
+
+def _top_authors_table(authors: list[dict]) -> str:
+    if not authors:
+        return ""
+    header = ("| 作者 | 入榜视频数 | 命中播放合计 | 主页 |\n|---|---|---|---|")
+    rows = []
+    for a in authors[:10]:
+        home = a.get("homepage") or ""
+        name = f"[{_cell(a.get('nickname') or a.get('uid', '?'), 20)}]({home})" if home \
+            else _cell(a.get("nickname") or a.get("uid", "?"), 20)
+        rows.append(f"| {name} | {a.get('video_hits', 0)} | {_fmt_int(a.get('total_plays'))} "
+                    + (f"| [主页]({home}) |" if home else "| - |"))
+    return header + "\n" + "\n".join(rows)
+
+
+def _keyword_section_md(s: dict) -> str:
+    """单个关键词赛道章节。"""
+    idx = s.get("index", 1)
+    keyword = s.get("keyword", "?")
+    platform = PLATFORM_DISPLAY.get(s.get("platform"), s.get("platform", ""))
+    parts: list[str] = []
+    parts.append(f"### {idx}. 关键词「{keyword}」（{platform}）\n")
+
+    meta_bits = []
+    if s.get("video_count"):
+        meta_bits.append(f"头部视频 **{s['video_count']}** 条")
+    if s.get("publish_span"):
+        meta_bits.append(f"发布跨度 {s['publish_span']}")
+    if s.get("comment_count") is not None:
+        meta_bits.append(f"抓取评论 **{s.get('comment_count', 0)}** 条")
+    if meta_bits:
+        parts.append("- " + "\n- ".join(meta_bits) + "\n")
+
+    if s.get("search_screenshot"):
+        parts.append(f"![「{keyword}」搜索结果]({s['search_screenshot']})\n")
+
+    parts.append("#### 头部内容\n")
+    parts.append(_keyword_video_table(s.get("videos") or []) + "\n")
+
+    authors_table = _top_authors_table(s.get("top_authors") or [])
+    if authors_table:
+        parts.append("#### 活跃作者榜（该关键词下的玩家）\n")
+        parts.append(authors_table + "\n")
+
+    parts.append("#### 赛道内容分析\n")
+    parts.append((s.get("content_analysis") or "*（LLM 分析不可用或未启用）*") + "\n")
+
+    parts.append(f"#### 用户评论洞察（抓取 {s.get('comment_count', 0)} 条评论）\n")
+    parts.append((s.get("comment_insight") or "*（评论数不足或 LLM 分析不可用）*") + "\n")
+
+    if s.get("top_comments"):
+        parts.append("#### 代表性高赞评论\n")
+        parts.append(_comment_block(s["top_comments"]) + "\n")
+
+    shots = s.get("video_screenshots") or []
+    if shots:
+        parts.append("#### 头部视频截图\n")
+        for v in shots:
+            title = _cell(v.get("title"), 40) or "视频"
+            parts.append(f"**{title}**（{_md_link('查看原视频', v.get('url', ''))}）\n")
+            parts.append(f"![{title}]({v.get('screenshot', '')})\n")
+
+    for w in s.get("warnings") or []:
+        parts.append(f"> ⚠️ {' '.join(str(w).split())}\n")
+    return "\n".join(parts)
+
+
+def build_keyword_report(
+    title: str,
+    generated_at: str,
+    params: dict,
+    sections: list[dict],
+    market_overview: str = "",
+    trigger_type: str = "manual",
+) -> str:
+    """关键词赛道调研报告（mode=keyword）。"""
+    trigger = "定时自动" if trigger_type == "scheduled" else "手动触发"
+    lines: list[str] = []
+    lines.append(f"# 关键词赛道调研报告：{title}\n")
+    lines.append(
+        f"> 生成时间：{generated_at}  \n"
+        f"> 触发方式：{trigger}  \n"
+        f"> 关键词数量：{len(sections)}  \n"
+        f"> 调研参数：每关键词搜索 Top {params.get('max_videos_per_keyword', 15)} 条视频"
+        f"（翻 {params.get('max_search_pages', 2)} 页），"
+        f"Top {params.get('top_videos_for_comments', 5)} 条视频的评论区各 "
+        f"{params.get('max_comments_per_video', 50)} 条评论\n"
+    )
+
+    lines.append("## 一、市场概览（LLM 跨赛道对比）\n")
+    lines.append((market_overview or "*（LLM 分析不可用或未启用）*") + "\n")
+
+    lines.append("## 二、赛道总览\n")
+    header = ("| # | 关键词 | 平台 | 头部视频数 | 平均播放 | 平均点赞 | 平均评论 | 抓取评论 |\n"
+              "|---|---|---|---|---|---|---|---|")
+    rows = []
+    for s in sections:
+        platform = PLATFORM_DISPLAY.get(s.get("platform"), s.get("platform"))
+        rows.append(
+            f"| {s.get('index', '')} | {_cell(s.get('keyword', ''), 20)} | {platform} "
+            f"| {s.get('video_count', 0)} | {_fmt_int(s.get('avg_plays'))} "
+            f"| {_fmt_int(s.get('avg_likes'))} | {_fmt_int(s.get('avg_comments'))} "
+            f"| {s.get('comment_count', 0)} |"
+        )
+    lines.append(header + "\n" + "\n".join(rows) + "\n")
+
+    lines.append("## 三、赛道详情\n")
+    for s in sections:
+        lines.append(_keyword_section_md(s))
+
+    all_warnings = [w for s in sections for w in (s.get("warnings") or [])]
+    lines.append("## 四、数据说明\n")
+    lines.append("- 数据来源：各平台关键词搜索结果的公开数据，互动数据为抓取时刻快照。")
+    lines.append("- 活跃作者榜基于搜索命中视频聚合，可作为「账号分析」的选号参考。")
+    lines.append("- LLM 分析基于标题、互动数据与评论文本推断，仅供参考。")
+    if all_warnings:
+        lines.append("- 本次调研的跳过项：")
+        for w in all_warnings:
+            lines.append(f"  - {' '.join(str(w).split())}")
+    return "\n".join(lines) + "\n"
+
+
 def sanitize_report_title(title: str, fallback: str = "竞品调研") -> str:
     """报告目录名安全化。"""
     s = re.sub(r'[\\/:*?"<>|\s]+', "_", (title or "").strip())
