@@ -4,8 +4,10 @@ import {
   Badge, Button, Card, DatePicker, Form, Input, InputNumber, Modal, Popconfirm,
   Progress, Radio, Select, Space, Switch, Table, Tabs, Tag, Tooltip, message,
 } from 'antd';
+import dayjs from 'dayjs';
 import type { Dayjs } from 'dayjs';
 import type { ColumnsType } from 'antd/es/table';
+import type { RangePickerProps } from 'antd/es/date-picker';
 import {
   useAddCompetitor, useCompetitors, useDeleteCompetitor,
   useDeleteResearch, useDiscoverCompetitors, useResearchList,
@@ -30,6 +32,15 @@ const STATUS_META: Record<string, { color: string; text: string }> = {
   completed: { color: 'success', text: '已完成' },
   failed: { color: 'error', text: '失败' },
 };
+
+// 调研时间范围快捷预设（value 用函数，点击时才计算“今天”）
+const RANGE_PRESETS: RangePickerProps['presets'] = [
+  { label: '近一周', value: () => [dayjs().subtract(7, 'day'), dayjs()] },
+  { label: '近一个月', value: () => [dayjs().subtract(1, 'month'), dayjs()] },
+  { label: '近 3 个月', value: () => [dayjs().subtract(3, 'month'), dayjs()] },
+  { label: '近半年', value: () => [dayjs().subtract(6, 'month'), dayjs()] },
+  { label: '近一年', value: () => [dayjs().subtract(1, 'year'), dayjs()] },
+];
 
 function fmtNum(n?: number): string {
   if (!n) return '0';
@@ -331,7 +342,8 @@ function ResearchLauncher() {
           )}
         </Form.Item>
         <Form.Item name="range">
-          <DatePicker.RangePicker placeholder={['发布起', '发布止']} allowEmpty={[true, true]} />
+          <DatePicker.RangePicker placeholder={['发布起', '发布止']} allowEmpty={[true, true]}
+            presets={RANGE_PRESETS} />
         </Form.Item>
         <Form.Item name="max_videos" label={mode === 'accounts' ? '每账号视频数' : '每关键词视频数'}>
           <InputNumber min={1} max={50} style={{ width: 70 }} />
