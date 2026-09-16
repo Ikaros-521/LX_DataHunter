@@ -444,3 +444,49 @@ def test_report_danmaku_count_line():
     kw["danmaku_count"] = 88
     md2 = build_keyword_report("弹幕赛道", "2026-09-16", {}, [kw], trigger_type="manual")
     assert "原始弹幕存库 **88** 条" in md2
+
+
+# ---- 弹幕查询/导出 API（内存库直连）----
+
+def test_research_danmakus_list_and_export():
+    import asyncio
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from backend.models import Base, ResearchTask, ResearchDanmaku
+    from backend.api.research import export_research_danmakus, list_research_danmakus
+
+    async def run():
+        eng = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with eng.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        Session = async_sessionmaker(eng, expire_on_commit=False)
+        async with Session() as db:
+            task = ResearchTask(title="弹幕任务", competitor_stats=[{
+                "videos": [{"content_id": "111", "title": "视频甲"},
+                           {"content_id": "222", "title": "视频乙"}]}])
+            db.add(task)
+            await db.flush()
+            for cid in ("111", "222"):
+                for i in range(3):
+                    db.add(ResearchDanmaku(
+                        research_task_id=task.id, competitor_id=1, content_id=cid,
+                        danmaku_id=f"{cid}-{i}", text=f"弹幕{i}", dm_time=float(i),
+                        mode=4, font_size=18, color="ffffff", user_hash="h"))
+            await db.commit()
+
+            resp = await list_research_danmakus(task.id, db=db)
+            assert resp["total"] == 6
+            assert {c.count for c in resp["contents"]} == {3}
+            assert {c.content_id: c.title for c in resp["contents"]}["111"] == "视频甲"
+
+            filtered = await list_research_danmakus(task.id, content_id="222", db=db)
+            assert filtered["total"] == 3
+            assert all(i.content_id == "222" for i in filtered["items"])
+            assert len(filtered["contents"]) == 2  # 统计不受筛选影响
+
+            csv_resp = await export_research_danmakus(task.id, db=db)
+            body = csv_resp.body.decode("utf-8")
+            assert csv_resp.media_type.startswith("text/csv")
+            assert "弹幕内容" in body and "视频甲" in body and "底部" in body
+        await eng.dispose()
+
+    asyncio.run(run())

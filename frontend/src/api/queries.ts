@@ -632,3 +632,38 @@ export async function fetchReportMarkdown(id: number): Promise<string> {
   const resp = await client.get(`/research/${id}/file`, { responseType: 'text', transformResponse: (x) => x });
   return resp.data as string;
 }
+
+export interface ResearchDanmakuItem {
+  id: number;
+  competitor_id: number;
+  content_id: string;
+  danmaku_id: string;
+  text: string;
+  send_time: string | null;
+  dm_time: number;
+  mode: number;
+  font_size: number;
+  color: string;
+  user_hash: string;
+  pool: number;
+}
+
+export interface ResearchDanmakuList {
+  total: number;
+  contents: { content_id: string; title: string; count: number }[];
+  items: ResearchDanmakuItem[];
+}
+
+/** 调研任务的原始弹幕（分页，可按视频筛选）。 */
+export function useResearchDanmakus(
+  researchId: number | null,
+  params: { content_id?: string; page: number; page_size?: number },
+  enabled: boolean,
+) {
+  return useQuery<ResearchDanmakuList>({
+    queryKey: ['research', researchId, 'danmakus', params],
+    enabled: enabled && researchId != null,
+    queryFn: () => client.get(`/research/${researchId}/danmakus`, { params })
+      .then(r => r.data as ResearchDanmakuList),
+  });
+}

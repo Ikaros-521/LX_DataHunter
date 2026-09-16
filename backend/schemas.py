@@ -455,6 +455,35 @@ class ResearchListResponse(BaseModel):
     items: list[ResearchTaskResponse]
 
 
+class ResearchDanmakuResponse(BaseModel):
+    id: int
+    competitor_id: int = 0
+    content_id: str = ""
+    danmaku_id: str = ""
+    text: str = ""
+    send_time: Optional[datetime] = None
+    dm_time: float = 0
+    mode: int = 1
+    font_size: int = 25
+    color: str = ""
+    user_hash: str = ""
+    pool: int = 0
+
+    model_config = {"from_attributes": True}
+
+
+class ResearchDanmakuContentStat(BaseModel):
+    content_id: str
+    title: str = ""
+    count: int = 0
+
+
+class ResearchDanmakuListResponse(BaseModel):
+    total: int
+    contents: list[ResearchDanmakuContentStat] = []
+    items: list[ResearchDanmakuResponse]
+
+
 class ResearchScheduleUpsert(BaseModel):
     interval_minutes: int = Field(default=10080, ge=30, le=43200)
     enabled: bool = False

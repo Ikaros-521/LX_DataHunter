@@ -1,21 +1,25 @@
 """竞品调研任务 API：创建/查询/删除 + 报告文件服务 + 定时配置 + 关键词管理。"""
+import csv
+import io
 import logging
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
 from backend.database import get_db
 from backend.models import (
-    Competitor, ResearchComment, ResearchKeyword, ResearchSchedule, ResearchTask,
+    Competitor, ResearchComment, ResearchDanmaku, ResearchKeyword,
+    ResearchSchedule, ResearchTask,
 )
 from backend.schemas import (
-    MessageResponse, ResearchCreateRequest, ResearchKeywordCreate,
+    MessageResponse, ResearchCreateRequest, ResearchDanmakuContentStat,
+    ResearchDanmakuListResponse, ResearchKeywordCreate,
     ResearchKeywordListResponse, ResearchKeywordResponse,
     ResearchKeywordUpdate, ResearchListResponse, ResearchScheduleResponse,
     ResearchScheduleUpsert, ResearchTaskResponse,
@@ -254,6 +258,82 @@ async def delete_research(research_id: int, db: AsyncSession = Depends(get_db)):
     if task_dir.exists():
         shutil.rmtree(task_dir, ignore_errors=True)
     return {"message": f"Deleted research task id={research_id}"}
+
+
+@router.get("/{research_id}/danmakus/export")
+async def export_research_danmakus(research_id: int,
+                                   db: AsyncSession = Depends(get_db)):
+    """任务全部原始弹幕导出 CSV（utf-8-sig，Excel 可直接打开）。"""
+    task = await db.get(ResearchTask, research_id)
+    if not task:
+        raise HTTPException(404, f"Research task not found: id={research_id}")
+    rows = (await db.execute(
+        select(ResearchDanmaku)
+        .where(ResearchDanmaku.research_task_id == research_id)
+        .order_by(ResearchDanmaku.content_id, ResearchDanmaku.dm_time, ResearchDanmaku.id)
+    )).scalars().all()
+
+    titles: dict[str, str] = {}
+    for s in (task.competitor_stats or []):
+        for v in s.get("videos") or []:
+            if v.get("content_id"):
+                titles[str(v["content_id"])] = v.get("title", "")
+
+    mode_label = {1: "滚动", 4: "底部", 5: "顶部"}
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["content_id", "视频标题", "danmaku_id", "弹幕内容", "发送时间",
+                     "视频内秒数", "模式", "字号", "颜色", "用户哈希", "池"])
+    for r in rows:
+        writer.writerow([
+            r.content_id, titles.get(r.content_id, ""), r.danmaku_id, r.text,
+            r.send_time.strftime("%Y-%m-%d %H:%M:%S") if r.send_time else "",
+            r.dm_time, mode_label.get(r.mode, r.mode), r.font_size,
+            r.color, r.user_hash, r.pool,
+        ])
+    return Response(
+        content=buf.getvalue(), media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="danmaku_{task.id}.csv"'},
+    )
+
+
+@router.get("/{research_id}/danmakus", response_model=ResearchDanmakuListResponse)
+async def list_research_danmakus(
+    research_id: int, competitor_id: int | None = None, content_id: str | None = None,
+    page: int = 1, page_size: int = 50, db: AsyncSession = Depends(get_db),
+):
+    """调研任务抓取的原始弹幕（分页，可按视频筛选；附各视频条数统计）。"""
+    task = await db.get(ResearchTask, research_id)
+    if not task:
+        raise HTTPException(404, f"Research task not found: id={research_id}")
+
+    conds = [ResearchDanmaku.research_task_id == research_id]
+    if competitor_id is not None:
+        conds.append(ResearchDanmaku.competitor_id == competitor_id)
+    if content_id:
+        conds.append(ResearchDanmaku.content_id == content_id)
+
+    total = (await db.execute(
+        select(func.count(ResearchDanmaku.id)).where(*conds))).scalar() or 0
+    items = (await db.execute(
+        select(ResearchDanmaku).where(*conds)
+        .order_by(ResearchDanmaku.dm_time, ResearchDanmaku.id)
+        .offset((page - 1) * page_size).limit(page_size)
+    )).scalars().all()
+
+    # 各视频弹幕条数（不受筛选影响，供下拉）
+    stats = (await db.execute(
+        select(ResearchDanmaku.content_id, func.count(ResearchDanmaku.id))
+        .where(ResearchDanmaku.research_task_id == research_id)
+        .group_by(ResearchDanmaku.content_id))).all()
+    titles: dict[str, str] = {}
+    for s in (task.competitor_stats or []):
+        for v in s.get("videos") or []:
+            if v.get("content_id"):
+                titles[str(v["content_id"])] = v.get("title", "")
+    contents = [ResearchDanmakuContentStat(content_id=cid, title=titles.get(cid, ""), count=n)
+                for cid, n in sorted(stats, key=lambda x: -x[1])]
+    return {"total": total, "contents": contents, "items": items}
 
 
 @router.get("/{research_id}/file")
