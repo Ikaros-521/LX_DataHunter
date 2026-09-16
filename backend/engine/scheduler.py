@@ -41,10 +41,12 @@ async def run_scheduled_research():
             "date_from": (beijing_now() - timedelta(days=days)).strftime("%Y-%m-%d"),
             "date_to": None,
             "max_videos_per_competitor": int(cfg.get("max_videos_per_competitor", 8)),
-            "top_videos_for_comments": int(cfg.get("top_videos_for_comments", 5)),
-            "max_comments_per_video": int(cfg.get("max_comments_per_video", 50)),
+            "top_videos_for_comments": int(cfg.get("top_videos_for_comments", -1)),
+            "max_comments_per_video": int(cfg.get("max_comments_per_video", 100)),
             "max_videos_per_keyword": int(cfg.get("max_videos_per_keyword", 15)),
             "max_search_pages": int(cfg.get("max_search_pages", 2)),
+            "crawl_danmaku": bool(cfg.get("crawl_danmaku", True)),
+            "max_danmakus_per_video": int(cfg.get("max_danmakus_per_video", -1)),
         }
         if mode == "keyword":
             ids = (await db.execute(

@@ -126,6 +126,8 @@ async def create_research(body: ResearchCreateRequest, db: AsyncSession = Depend
         "max_comments_per_video": body.max_comments_per_video,
         "max_videos_per_keyword": body.max_videos_per_keyword,
         "max_search_pages": body.max_search_pages,
+        "crawl_danmaku": body.crawl_danmaku,
+        "max_danmakus_per_video": body.max_danmakus_per_video,
     }
     task = await start_research(db, ids, params, title=body.title,
                                 trigger_type="manual", mode=mode)

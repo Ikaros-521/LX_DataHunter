@@ -597,6 +597,7 @@ export function useCreateResearch() {
       max_videos_per_competitor?: number; top_videos_for_comments?: number;
       max_comments_per_video?: number;
       max_videos_per_keyword?: number; max_search_pages?: number;
+      crawl_danmaku?: boolean; max_danmakus_per_video?: number;
     }) => client.post('/research', body).then(r => r.data as ResearchTask),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['research'] }),
   });

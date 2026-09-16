@@ -266,6 +266,8 @@ function CompetitorsTab() {
 function ResearchLauncher() {
   const [form] = Form.useForm();
   const [mode, setMode] = useState<'accounts' | 'keyword'>('accounts');
+  const [allVideos, setAllVideos] = useState(true);
+  const [allComments, setAllComments] = useState(false);
   const { data: compData } = useCompetitors();
   const { data: kwData } = useResearchKeywords();
   const create = useCreateResearch();
@@ -290,8 +292,9 @@ function ResearchLauncher() {
       keyword_ids: mode === 'keyword' ? v.targets : [],
       date_from: range?.[0]?.format('YYYY-MM-DD') || null,
       date_to: range?.[1]?.format('YYYY-MM-DD') || null,
-      top_videos_for_comments: v.top_videos,
-      max_comments_per_video: v.max_comments,
+      top_videos_for_comments: v.all_videos ? -1 : v.top_videos,
+      max_comments_per_video: v.all_comments ? -1 : v.max_comments,
+      crawl_danmaku: v.danmaku,
       ...(mode === 'accounts'
         ? { max_videos_per_competitor: v.max_videos }
         : { max_videos_per_keyword: v.max_videos, max_search_pages: v.max_pages }),
@@ -305,7 +308,7 @@ function ResearchLauncher() {
   return (
     <Card title="发起竞品调研" size="small" style={{ marginBottom: 16 }}>
       <Form form={form} layout="inline"
-        initialValues={{ max_videos: 8, max_pages: 2, top_videos: 5, max_comments: 50 }}
+        initialValues={{ max_videos: 8, max_pages: 2, all_videos: true, top_videos: 5, all_comments: false, max_comments: 100, danmaku: true }}
         style={{ flexWrap: 'wrap', gap: 8 }}>
         <Form.Item>
           <Radio.Group value={mode} onChange={e => setMode(e.target.value)}
@@ -338,11 +341,28 @@ function ResearchLauncher() {
             <InputNumber min={1} max={10} style={{ width: 60 }} />
           </Form.Item>
         )}
-        <Form.Item name="top_videos" label="爬评论视频数">
-          <InputNumber min={0} max={10} style={{ width: 60 }} />
+        <Form.Item name="all_videos" label="爬评论视频">
+          <Switch checkedChildren="全部" unCheckedChildren="Top N"
+            onChange={setAllVideos} />
         </Form.Item>
-        <Form.Item name="max_comments" label="每视频评论数">
-          <InputNumber min={1} max={500} style={{ width: 70 }} />
+        {!allVideos && (
+          <Form.Item name="top_videos" label="Top N">
+            <InputNumber min={1} max={50} style={{ width: 60 }} />
+          </Form.Item>
+        )}
+        <Form.Item name="all_comments" label="评论全爬"
+          tooltip="开启后每条视频爬取全部评论，不做条数限制">
+          <Switch checkedChildren="全爬" unCheckedChildren="限量"
+            onChange={setAllComments} />
+        </Form.Item>
+        {!allComments && (
+          <Form.Item name="max_comments" label="每视频评论数">
+            <InputNumber min={1} max={500} style={{ width: 70 }} />
+          </Form.Item>
+        )}
+        <Form.Item name="danmaku" label="弹幕存库"
+          tooltip="B站视频的原始弹幕全量抓取并存入数据库，供后续分析使用（抖音无弹幕）">
+          <Switch checkedChildren="开" unCheckedChildren="关" />
         </Form.Item>
         <Form.Item name="title">
           <Input placeholder="报告标题（可选）" style={{ width: 180 }} allowClear maxLength={50} />

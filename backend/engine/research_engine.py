@@ -19,12 +19,12 @@ from sqlalchemy import delete, select
 from backend.config import settings
 from backend.database import AsyncSessionLocal
 from backend.models import (
-    Competitor, ResearchComment, ResearchKeyword, ResearchStatus, ResearchTask,
-    beijing_now,
+    Competitor, ResearchComment, ResearchDanmaku, ResearchKeyword,
+    ResearchStatus, ResearchTask, beijing_now,
 )
 from .comment_crawler import (
-    CommentItem, crawl_bilibili_comments, crawl_douyin_comments_batch,
-    screenshot_pages,
+    CommentItem, crawl_bilibili_comments, crawl_bilibili_danmakus,
+    crawl_douyin_comments_batch, screenshot_pages,
 )
 from .competitor_discovery import search_bilibili_videos, search_douyin_videos
 from .hot_crawler import _run_coro_in_thread
@@ -420,6 +420,7 @@ class ResearchEngine:
             "avg_likes": 0, "avg_comments": 0, "avg_plays": 0,
             "publish_span": "",
             "comment_count": 0,
+            "danmaku_count": 0,
             "profile_screenshot": "",
             "video_screenshots": [],
             "top_comments": [],
@@ -466,17 +467,21 @@ class ResearchEngine:
 
     async def _collect_comments(self, db, task: ResearchTask, comp: Competitor,
                                 section: dict, params: dict, cookie_str: str | None):
-        """按互动量选 Top 视频，爬评论 + 截图，评论落库 ResearchComment。"""
+        """选视频爬评论 + 截图，评论落库 ResearchComment。
+
+        top_videos_for_comments：-1=全部视频，0=不爬，>0=互动量 Top N；
+        max_comments_per_video：-1=全量爬取，>0=每视频上限。
+        """
         videos = section.get("videos") or []
-        top_k = int(params.get("top_videos_for_comments", 5))
-        max_comments = int(params.get("max_comments_per_video", 50))
-        if not videos or top_k <= 0:
+        top_k = int(params.get("top_videos_for_comments", -1))
+        max_comments = int(params.get("max_comments_per_video", 100))
+        if not videos or top_k == 0:
             if not videos:
                 section["warnings"].append("无视频可爬评论（时间范围内无内容或抓取失败）")
             return
 
         ranked = sorted(videos, key=lambda v: v["likes"] + v["comments"], reverse=True)
-        picked = ranked[:top_k]
+        picked = ranked if top_k < 0 else ranked[:top_k]
 
         all_comments: list[CommentItem] = []
         if comp.platform == "bilibili":
@@ -490,6 +495,9 @@ class ResearchEngine:
                     all_comments.extend(comments)
                 except Exception as e:
                     logger.warning(f"Bilibili comments failed for av{v['content_id']}: {e}")
+            # 原始弹幕全量存库（独立于评论，供后续分析复用）
+            section["danmaku_count"] = await self._crawl_and_store_danmakus(
+                db, task, comp.id, picked, params, cred)
             # B站截图（Playwright，独立线程）
             try:
                 assets = _assets_dir(task)
@@ -580,6 +588,47 @@ class ResearchEngine:
             db.add_all(rows)
             await db.commit()
 
+    async def _crawl_and_store_danmakus(self, db, task: ResearchTask, owner_id: int,
+                                        picked: list[dict], params: dict, cred) -> int:
+        """B站视频原始弹幕抓取并落库 ResearchDanmaku（重跑先清旧），返回条数。
+
+        owner_id：账号模式为竞品 id，关键词模式为 keyword id。
+        弹幕仅作为原始数据存储供后续分析复用，不参与本报告的 LLM 分析。
+        """
+        if not params.get("crawl_danmaku", True) or not picked:
+            return 0
+        max_dm = int(params.get("max_danmakus_per_video", -1))
+        rows: list[ResearchDanmaku] = []
+        for v in picked:
+            try:
+                dms = await crawl_bilibili_danmakus(
+                    int(v["content_id"]), max_dm, credential=cred)
+                rows.extend(ResearchDanmaku(
+                    research_task_id=task.id,
+                    competitor_id=owner_id,
+                    content_id=str(v["content_id"]),
+                    danmaku_id=d.danmaku_id,
+                    text=d.text[:5000],
+                    send_time=d.send_time,
+                    dm_time=d.dm_time,
+                    mode=d.mode,
+                    font_size=d.font_size,
+                    color=d.color[:8],
+                    user_hash=d.user_hash[:64],
+                    pool=d.pool,
+                    extra=dict(d.extra, content_id=str(v["content_id"])),
+                ) for d in dms)
+            except Exception as e:
+                logger.warning(f"Bilibili danmaku failed for av{v['content_id']}: {e}")
+        if rows:
+            await db.execute(delete(ResearchDanmaku).where(
+                ResearchDanmaku.research_task_id == task.id,
+                ResearchDanmaku.competitor_id == owner_id,
+            ))
+            db.add_all(rows)
+            await db.commit()
+        return len(rows)
+
     async def _chat_with_retry(self, llm: LlmClient, system: str, user: str,
                                retries: int = 2, delay: float = 8.0) -> str:
         """LLM 调用带重试（调研报告对限流/抖动更宽容）。"""
@@ -640,6 +689,7 @@ class ResearchEngine:
             "publish_span": "",
             "top_authors": [],
             "comment_count": 0,
+            "danmaku_count": 0,
             "search_screenshot": "",
             "video_screenshots": [],
             "top_comments": [],
@@ -737,17 +787,21 @@ class ResearchEngine:
 
     async def _collect_keyword_comments(self, db, task: ResearchTask, section: dict,
                                         params: dict, cookie_str: str | None):
-        """关键词模式：头部视频爬评论 + 截图，评论落库。"""
+        """关键词模式：视频爬评论 + 截图，评论落库。
+
+        top_videos_for_comments：-1=全部视频，0=不爬，>0=互动量 Top N；
+        max_comments_per_video：-1=全量爬取，>0=每视频上限。
+        """
         videos = section.get("videos") or []
-        top_k = int(params.get("top_videos_for_comments", 5))
-        max_comments = int(params.get("max_comments_per_video", 50))
-        if not videos or top_k <= 0:
+        top_k = int(params.get("top_videos_for_comments", -1))
+        max_comments = int(params.get("max_comments_per_video", 100))
+        if not videos or top_k == 0:
             if not videos:
                 section["warnings"].append("关键词下无视频，评论与截图跳过")
             return
 
         ranked = sorted(videos, key=lambda v: v["likes"] + v["comments"], reverse=True)
-        picked = ranked[:top_k]
+        picked = ranked if top_k < 0 else ranked[:top_k]
         all_comments: list[CommentItem] = []
         platform = section.get("platform")
 
@@ -761,6 +815,9 @@ class ResearchEngine:
                     all_comments.extend(comments)
                 except Exception as e:
                     logger.warning(f"Bilibili comments failed for av{v['content_id']}: {e}")
+            section["danmaku_count"] = await self._crawl_and_store_danmakus(
+                db, task, section.get("keyword_id", 0), picked, params,
+                _make_credential(cookie_str))
             try:
                 from urllib.parse import quote
                 assets = _assets_dir(task)

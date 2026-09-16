@@ -23,6 +23,17 @@ def _fmt_int(n: Any) -> str:
     return str(n)
 
 
+def _comment_scope_text(params: dict) -> str:
+    """报告头部的评论抓取范围描述（-1 表示全部，0 表示未爬）。"""
+    top_k = int(params.get("top_videos_for_comments", -1))
+    per_video = int(params.get("max_comments_per_video", 100))
+    if top_k == 0:
+        return "未爬取评论"
+    videos = "全部视频" if top_k < 0 else f"Top {top_k} 条视频"
+    comments = "全量抓取" if per_video < 0 else f"各最多 {per_video} 条"
+    return f"{videos}的评论区{comments}"
+
+
 def _cell(text: Any, max_len: int = 60) -> str:
     """表格单元格安全化：去换行、转义竖线、截断。"""
     s = str(text or "").replace("\r", " ").replace("\n", " ").strip()
@@ -120,6 +131,8 @@ def _section_md(s: dict) -> str:
         stats_bits.append(f"平均点赞 **{_fmt_int(s.get('avg_likes'))}** / 平均评论 **{_fmt_int(s.get('avg_comments'))}**")
     if s.get("comment_count") is not None:
         stats_bits.append(f"抓取评论 **{s.get('comment_count', 0)}** 条")
+    if s.get("danmaku_count"):
+        stats_bits.append(f"原始弹幕存库 **{s.get('danmaku_count', 0)}** 条（可供后续分析）")
     if stats_bits:
         parts.append("- " + "\n- ".join([f"数据摘要：{stats_bits[0]}"] + stats_bits[1:]) + "\n")
 
@@ -177,8 +190,7 @@ def build_report(
         f"> 竞品数量：{len(sections)}  \n"
         f"> 视频时间范围：{date_range or '未限定'}  \n"
         f"> 调研参数：每竞品最多 {params.get('max_videos_per_competitor', 8)} 条视频，"
-        f"Top {params.get('top_videos_for_comments', 5)} 条视频的评论区各 "
-        f"{params.get('max_comments_per_video', 50)} 条评论\n"
+        f"{_comment_scope_text(params)}\n"
     )
 
     lines.append("## 一、市场概览（LLM 跨竞品对比）\n")
@@ -250,6 +262,8 @@ def _keyword_section_md(s: dict) -> str:
         meta_bits.append(f"发布跨度 {s['publish_span']}")
     if s.get("comment_count") is not None:
         meta_bits.append(f"抓取评论 **{s.get('comment_count', 0)}** 条")
+    if s.get("danmaku_count"):
+        meta_bits.append(f"原始弹幕存库 **{s.get('danmaku_count', 0)}** 条（可供后续分析）")
     if meta_bits:
         parts.append("- " + "\n- ".join(meta_bits) + "\n")
 
@@ -305,8 +319,7 @@ def build_keyword_report(
         f"> 关键词数量：{len(sections)}  \n"
         f"> 调研参数：每关键词搜索 Top {params.get('max_videos_per_keyword', 15)} 条视频"
         f"（翻 {params.get('max_search_pages', 2)} 页），"
-        f"Top {params.get('top_videos_for_comments', 5)} 条视频的评论区各 "
-        f"{params.get('max_comments_per_video', 50)} 条评论\n"
+        f"{_comment_scope_text(params)}\n"
     )
 
     lines.append("## 一、市场概览（LLM 跨赛道对比）\n")

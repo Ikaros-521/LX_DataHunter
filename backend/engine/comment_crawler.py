@@ -73,17 +73,26 @@ def parse_bilibili_reply(reply: dict) -> CommentItem:
 
 async def crawl_bilibili_comments(
     aid: int,
-    max_comments: int = 50,
+    max_comments: int = 100,
     credential=None,
 ) -> list[CommentItem]:
-    """拉取 B站视频评论，按点赞排序，最多 max_comments 条。"""
+    """拉取 B站视频评论，按点赞排序，最多 max_comments 条。
+
+    max_comments <= 0 表示全量爬取：按点赞序翻页直到评论区见底
+    （replies 为空或超过接口返回的总页数），上限 1000 页兜底。
+    """
     from bilibili_api import comment as bili_comment, sync
     from bilibili_api.comment import CommentResourceType, OrderType
 
+    unlimited = max_comments <= 0
     items: list[CommentItem] = []
     page = 1
-    max_pages = (max_comments // 20) + 2  # 每页约 20 条，多取一页余量
-    while len(items) < max_comments and page <= max_pages:
+    # 每页约 20 条，多取一页余量；全量模式由 replies 空页自然终止
+    max_pages = 1000 if unlimited else (max_comments // 20) + 2
+    total_pages = None  # 接口返回的评论总页数（page.count）
+    while (unlimited or len(items) < max_comments) and page <= max_pages:
+        if total_pages is not None and page > total_pages:
+            break
         try:
             data = sync(bili_comment.get_comments(
                 oid=aid,
@@ -98,6 +107,10 @@ async def crawl_bilibili_comments(
         replies = (data or {}).get("replies") or []
         if not replies:
             break
+        if total_pages is None:
+            total_pages = ((data or {}).get("page", {}) or {}).get("count")
+            if not isinstance(total_pages, int) or total_pages <= 0:
+                total_pages = None
         for r in replies:
             items.append(parse_bilibili_reply(r))
         page += 1
@@ -111,7 +124,78 @@ async def crawl_bilibili_comments(
             continue
         seen.add(c.comment_id)
         unique.append(c)
-    return unique[:max_comments]
+    return unique if unlimited else unique[:max_comments]
+
+
+# --------------------------------------------------------------------------
+# B站弹幕（bilibili-api SDK，当前弹幕池全量）
+# --------------------------------------------------------------------------
+
+@dataclass
+class DanmakuItem:
+    """跨平台统一的弹幕结构（目前仅B站）。"""
+    danmaku_id: str = ""
+    text: str = ""
+    send_time: datetime | None = None
+    dm_time: float = 0.0        # 视频内出现位置（秒）
+    mode: int = 1               # 1=滚动 4=底部 5=顶部
+    font_size: int = 25
+    color: str = ""
+    user_hash: str = ""
+    pool: int = 0
+    extra: dict = field(default_factory=dict)
+
+
+def parse_bilibili_danmaku(dm) -> DanmakuItem:
+    """SDK Danmaku 对象 → 统一结构（纯函数，便于单测）。"""
+    def _int(v, default: int) -> int:
+        return int(getattr(v, "value", v) or default)
+
+    send_ts = float(getattr(dm, "send_time", 0) or 0)
+    return DanmakuItem(
+        danmaku_id=str(getattr(dm, "id_", 0) or getattr(dm, "id_str", "") or ""),
+        text=(getattr(dm, "text", "") or "").strip(),
+        send_time=datetime.fromtimestamp(send_ts) if send_ts else None,
+        dm_time=float(getattr(dm, "dm_time", 0) or 0),
+        mode=_int(getattr(dm, "mode", 1), 1),
+        font_size=_int(getattr(dm, "font_size", 25), 25),
+        color=str(getattr(dm, "color", "") or "").lstrip("#"),
+        user_hash=str(getattr(dm, "crc32_id", "") or ""),
+        pool=int(getattr(dm, "pool", 0) or 0),
+        extra={"weight": int(getattr(dm, "weight", 0) or 0)},
+    )
+
+
+async def crawl_bilibili_danmakus(
+    aid: int,
+    max_danmakus: int = -1,
+    credential=None,
+) -> list[DanmakuItem]:
+    """拉取 B站视频当前弹幕池弹幕（全量），最多 max_danmakus 条。
+
+    max_danmakus <= 0 表示不限量（弹幕接口按 6 分钟分段一次取全，
+    本身即全量返回，这里只做条数截断与去重）。
+    """
+    from bilibili_api import sync, video as bili_video
+
+    v = bili_video.Video(aid=aid, credential=credential)
+    try:
+        raw = sync(v.get_danmakus())
+    except Exception as e:
+        logger.warning(f"Bilibili danmakus failed for av{aid}: {e}")
+        return []
+
+    seen: set[str] = set()
+    unique: list[DanmakuItem] = []
+    for d in raw:
+        item = parse_bilibili_danmaku(d)
+        if not item.text:
+            continue
+        if item.danmaku_id and item.danmaku_id in seen:
+            continue
+        seen.add(item.danmaku_id)
+        unique.append(item)
+    return unique if max_danmakus <= 0 else unique[:max_danmakus]
 
 
 # --------------------------------------------------------------------------
@@ -146,7 +230,7 @@ def parse_douyin_comment_payload(data: dict) -> list[CommentItem]:
 async def crawl_douyin_comments_batch(
     profile_url: str | None,
     video_urls: list[str],
-    max_per_video: int = 50,
+    max_per_video: int = 100,
     cookie_str: str | None = None,
     screenshot_dir: Path | None = None,
     headless: bool = True,
@@ -159,6 +243,7 @@ async def crawl_douyin_comments_batch(
 
     返回 ({video_url: [CommentItem]}, {url: 截图文件名})；
     单个视频/截图失败不影响整体（对应项缺省）。
+    max_per_video <= 0 表示每视频全量爬取（滚动到评论区见底）。
     on_video_done(url, comment_count) 用于进度回调。
     """
     from playwright.async_api import async_playwright
@@ -230,12 +315,14 @@ async def crawl_douyin_comments_batch(
                     logger.warning(f"Douyin video page load incomplete: {url}: {e}")
                 await asyncio.sleep(4)
 
-                # 滚动评论区触发分页加载
+                # 滚动评论区触发分页加载；不限量模式滚动上限放大，
+                # 依靠 has_more=0 / 连续无新增自然终止
+                unlimited = max_per_video <= 0
                 no_new = 0
                 prev_total = 0
-                for _ in range(15):
+                for _ in range(250 if unlimited else 15):
                     total = sum(len(parse_douyin_comment_payload(d)) for d in xhr_pages)
-                    if total >= max_per_video:
+                    if not unlimited and total >= max_per_video:
                         break
                     if total == prev_total:
                         no_new += 1
@@ -244,6 +331,8 @@ async def crawl_douyin_comments_batch(
                     else:
                         no_new = 0
                     prev_total = total
+                    if xhr_pages and not any(p.get("has_more") for p in xhr_pages):
+                        break
                     await page.evaluate("window.scrollBy(0, 1200)")
                     await asyncio.sleep(1.5)
 
@@ -256,7 +345,7 @@ async def crawl_douyin_comments_batch(
                         seen.add(c.comment_id)
                         merged.append(c)
                 merged.sort(key=lambda c: c.likes, reverse=True)
-                comments[url] = merged[:max_per_video]
+                comments[url] = merged if unlimited else merged[:max_per_video]
 
                 if screenshot_dir:
                     out = screenshot_dir / f"video_{idx}_{_safe_filename(url.rstrip('/').split('/')[-1])}.png"

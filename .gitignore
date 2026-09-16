@@ -6,3 +6,4 @@ _test_output/
 data.db
 downloads/
 .env
+.zcode/

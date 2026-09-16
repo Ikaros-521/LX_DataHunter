@@ -327,6 +327,37 @@ ResearchTask.comments = relationship(
 )
 
 
+class ResearchDanmaku(Base):
+    """调研任务抓取的B站原始弹幕快照（全量存库，供后续分析复用）。
+
+    抖音无弹幕概念，仅 B站 视频会写入；关键词模式下 competitor_id 存 keyword id。
+    """
+    __tablename__ = "research_danmakus"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    research_task_id = Column(Integer, ForeignKey("research_tasks.id"), nullable=False, index=True)
+    competitor_id = Column(Integer, index=True, default=0)
+    content_id = Column(String(128), default="", index=True)   # B站 aid
+    danmaku_id = Column(String(128), default="")
+    text = Column(Text, default="")
+    send_time = Column(DateTime, nullable=True)   # 弹幕发送时间
+    dm_time = Column(Float, default=0)            # 视频内出现位置（秒）
+    mode = Column(Integer, default=1)             # 1=滚动 4=底部 5=顶部
+    font_size = Column(Integer, default=25)
+    color = Column(String(8), default="")         # 十六进制颜色
+    user_hash = Column(String(64), default="")    # 发送者 crc32 哈希（脱敏）
+    pool = Column(Integer, default=0)
+    extra = Column(JSON, default=dict)
+
+    research_task = relationship("ResearchTask", back_populates="danmakus")
+
+
+ResearchTask.danmakus = relationship(
+    "ResearchDanmaku", back_populates="research_task",
+    cascade="all, delete-orphan", passive_deletes=True,
+)
+
+
 class ResearchSchedule(Base):
     """竞品调研定时配置（单行全局）。"""
     __tablename__ = "research_schedules"

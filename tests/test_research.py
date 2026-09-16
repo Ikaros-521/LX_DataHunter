@@ -317,3 +317,130 @@ def test_sanitize_report_title():
     assert sanitize_report_title("a/b\\c:d*e?f\"g<h>i|j k") == "a_b_c_d_e_f_g_h_i_j_k"
     assert sanitize_report_title("") == "竞品调研"
     assert sanitize_report_title("   ") == "竞品调研"
+
+
+# ---- 评论抓取范围参数（-1 全部 / 0 未爬）----
+
+def test_comment_scope_text():
+    from backend.engine.report_builder import _comment_scope_text
+    assert _comment_scope_text({}) == "全部视频的评论区各最多 100 条"
+    assert _comment_scope_text(
+        {"top_videos_for_comments": -1, "max_comments_per_video": -1}
+    ) == "全部视频的评论区全量抓取"
+    assert _comment_scope_text(
+        {"top_videos_for_comments": 5, "max_comments_per_video": 50}
+    ) == "Top 5 条视频的评论区各最多 50 条"
+    assert _comment_scope_text({"top_videos_for_comments": 0}) == "未爬取评论"
+
+
+# ---- B站评论翻页（限量 / 全量）----
+
+def _fake_reply(rpid: int) -> dict:
+    return {
+        "rpid": rpid,
+        "like": rpid,
+        "ctime": 1726000000,
+        "content": {"message": f"评论{rpid}"},
+        "member": {"uname": f"用户{rpid}", "mid": str(rpid)},
+    }
+
+
+def _patch_bilibili_pages(monkeypatch, pages: list[dict], calls: list):
+    """把 bilibili_api.comment.get_comments / sync 换成同步假实现。
+
+    pages 为每页返回体；越界返回空 replies。calls 记录请求过的页码。
+    """
+    import bilibili_api
+    import bilibili_api.comment as bili_comment
+
+    def fake_get_comments(**kwargs):
+        calls.append(kwargs.get("page_index"))
+        idx = (kwargs.get("page_index") or 1) - 1
+        return pages[idx] if idx < len(pages) else {"replies": None, "page": {"count": len(pages)}}
+
+    monkeypatch.setattr(bili_comment, "get_comments", fake_get_comments)
+    monkeypatch.setattr(bilibili_api, "sync", lambda value: value)
+
+
+def test_crawl_bilibili_comments_unlimited(monkeypatch):
+    import asyncio
+    import backend.engine.comment_crawler as cc
+
+    pages = [
+        {"replies": [_fake_reply(i) for i in range(20)], "page": {"count": 2}},
+        {"replies": [_fake_reply(i) for i in range(20, 25)], "page": {"count": 2}},
+    ]
+    calls: list[int] = []
+    _patch_bilibili_pages(monkeypatch, pages, calls)
+
+    items = asyncio.run(cc.crawl_bilibili_comments(123, 0))
+    assert len(items) == 25  # 两页全取，不做截断
+    assert calls == [1, 2]   # 总页数 2，翻完即止
+
+
+def test_crawl_bilibili_comments_limited(monkeypatch):
+    import asyncio
+    import backend.engine.comment_crawler as cc
+
+    pages = [
+        {"replies": [_fake_reply(i) for i in range(20)], "page": {"count": 3}},
+        {"replies": [_fake_reply(i) for i in range(20, 30)], "page": {"count": 3}},
+    ]
+    calls: list[int] = []
+    _patch_bilibili_pages(monkeypatch, pages, calls)
+
+    items = asyncio.run(cc.crawl_bilibili_comments(123, 25))
+    assert len(items) == 25
+    assert calls == [1, 2]  # 25 条两页取满，不再翻第三页
+
+
+# ---- B站弹幕解析 / 抓取（限量与全量）----
+
+def _fake_sdk_danmaku(i: int):
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        id_=i, id_str="", text=f" 弹幕{i} ", send_time=1726000000.0,
+        dm_time=float(i), crc32_id=f"hash{i}", color="#ffffff",
+        mode=4, font_size=18, pool=0, weight=6,
+    )
+
+
+def test_parse_bilibili_danmaku():
+    from backend.engine.comment_crawler import parse_bilibili_danmaku
+    item = parse_bilibili_danmaku(_fake_sdk_danmaku(42))
+    assert item.danmaku_id == "42"
+    assert item.text == "弹幕42"
+    assert item.send_time is not None
+    assert item.dm_time == 42.0
+    assert item.mode == 4
+    assert item.font_size == 18
+    assert item.color == "ffffff"
+    assert item.user_hash == "hash42"
+    assert item.extra["weight"] == 6
+
+
+def test_crawl_bilibili_danmakus(monkeypatch):
+    import asyncio
+    import bilibili_api.video as bv
+    import backend.engine.comment_crawler as cc
+
+    raw = [_fake_sdk_danmaku(i) for i in range(5)] + [_fake_sdk_danmaku(3)]  # 含重复 id
+
+    async def fake_get_danmakus(self, **kwargs):
+        return raw
+
+    monkeypatch.setattr(bv.Video, "get_danmakus", fake_get_danmakus)
+    assert len(asyncio.run(cc.crawl_bilibili_danmakus(1, 0))) == 5   # 全量 + 去重
+    assert len(asyncio.run(cc.crawl_bilibili_danmakus(1, 3))) == 3   # 限量截断
+
+
+def test_report_danmaku_count_line():
+    s = _sample_section()
+    s["danmaku_count"] = 1234
+    md = build_report("弹幕报告", "2026-09-16", {}, [s], trigger_type="manual")
+    assert "原始弹幕存库 **1234** 条" in md
+
+    kw = _sample_keyword_section()
+    kw["danmaku_count"] = 88
+    md2 = build_keyword_report("弹幕赛道", "2026-09-16", {}, [kw], trigger_type="manual")
+    assert "原始弹幕存库 **88** 条" in md2

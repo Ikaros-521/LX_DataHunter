@@ -420,10 +420,12 @@ class ResearchCreateRequest(BaseModel):
     date_from: str | None = Field(default=None, description="起始日期 YYYY-MM-DD")
     date_to: str | None = Field(default=None, description="截止日期 YYYY-MM-DD")
     max_videos_per_competitor: int = Field(default=8, ge=1, le=50, description="账号模式：每竞品抓取的视频数")
-    top_videos_for_comments: int = Field(default=5, ge=0, le=10, description="爬评论的爆款视频数（账号模式每竞品 / 关键词模式每关键词）")
-    max_comments_per_video: int = Field(default=50, ge=1, le=500, description="每视频抓取的评论数")
+    top_videos_for_comments: int = Field(default=-1, ge=-1, le=50, description="爬评论的视频数：-1=全部视频，0=不爬评论，>0=互动量Top N（账号模式每竞品 / 关键词模式每关键词）")
+    max_comments_per_video: int = Field(default=100, ge=-1, le=500, description="每视频抓取的评论数：-1=全量爬取，>0=上限条数")
     max_videos_per_keyword: int = Field(default=15, ge=1, le=50, description="关键词模式：每关键词取的搜索视频数")
     max_search_pages: int = Field(default=2, ge=1, le=10, description="关键词模式：搜索翻页深度（B站每页42条）")
+    crawl_danmaku: bool = Field(default=True, description="是否抓取B站视频原始弹幕并存库（抖音无弹幕，自动跳过）")
+    max_danmakus_per_video: int = Field(default=-1, ge=-1, le=10000, description="每视频弹幕抓取数：-1=全量，>0=上限条数")
 
 
 class ResearchTaskResponse(BaseModel):
