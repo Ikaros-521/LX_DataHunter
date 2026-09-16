@@ -43,14 +43,14 @@ def _merge_hits(accounts: dict[str, DiscoveredAccount], limit: int) -> list[Disc
 # --------------------------------------------------------------------------
 
 async def discover_bilibili(keyword: str, max_items: int = 20) -> list[DiscoveredAccount]:
-    """B站关键词搜视频 → 按作者聚合出候选竞品账号。"""
+    """B站关键词搜视频 → 按作者聚合出候选竞品账号（并补齐粉丝数）。"""
     from bilibili_api import search as bili_search, sync
     from bilibili_api.search import SearchObjectType
 
     accounts: dict[str, DiscoveredAccount] = {}
     try:
         data = sync(bili_search.search_by_type(
-            keyword, search_type=SearchObjectType.VIDEOS,
+            keyword, search_type=SearchObjectType.VIDEO,
         ))
     except Exception as e:
         logger.warning(f"Bilibili search failed for '{keyword}': {e}")
@@ -69,7 +69,6 @@ async def discover_bilibili(keyword: str, max_items: int = 20) -> list[Discovere
                 platform="bilibili",
                 platform_uid=mid,
                 nickname=v.get("author", "") or "",
-                follower_count=v.get("upower", {}).get("follower_count", 0) if isinstance(v.get("upower"), dict) else 0,
                 homepage_url=f"https://space.bilibili.com/{mid}",
             )
         acc = accounts[mid]
@@ -78,8 +77,26 @@ async def discover_bilibili(keyword: str, max_items: int = 20) -> list[Discovere
             acc.sample_titles.append(title)
 
     candidates = _merge_hits(accounts, max_items)
+    await _fill_bilibili_followers(candidates)
     logger.info(f"Bilibili discovery '{keyword}': {len(results)} videos -> {len(candidates)} accounts")
     return candidates
+
+
+async def _fill_bilibili_followers(candidates: list[DiscoveredAccount]):
+    """搜索结果不含粉丝数，用 x/relation/stat 逐个补齐（失败不影响结果）。"""
+    import httpx
+
+    async with httpx.AsyncClient(timeout=15,
+                                 headers={"User-Agent": "Mozilla/5.0"}) as client:
+        async def fetch_one(acc: DiscoveredAccount):
+            try:
+                r = await client.get("https://api.bilibili.com/x/relation/stat",
+                                     params={"vmid": acc.platform_uid})
+                acc.follower_count = (r.json().get("data") or {}).get("follower", 0)
+            except Exception:
+                pass
+
+        await asyncio.gather(*(fetch_one(c) for c in candidates))
 
 
 # --------------------------------------------------------------------------
