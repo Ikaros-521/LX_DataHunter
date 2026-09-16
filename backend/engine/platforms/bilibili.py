@@ -57,27 +57,32 @@ class BilibiliAdapter(BasePlatformAdapter):
         # ---- 1. 用户信息 ----
         creator_info = await self._fetch_user_info(mid, cred)
 
-        # ---- 2. 视频列表 ----
+        # ---- 2. 视频列表（发布时间倒序；带日期过滤时先凑够再过滤，避免先截断后过滤导致数量不足） ----
         items: list[ContentItem] = []
         page = 1
         page_size = min(50, max_items) if max_items > 0 else 50
+        date_filtering = bool(date_from or date_to)
 
-        while len(items) < (max_items or 99999):
+        while page <= 60:
             try:
                 u = user.User(mid, credential=cred)
                 data = sync(u.get_videos(ps=page_size, pn=page, order=VideoOrder.PUBDATE))
                 vlist = data.get("list", {}).get("vlist", [])
                 logger.info(f"Page {page}: {len(vlist)} videos")
 
+                page_older_than_from = False
                 for v in vlist:
                     aid = str(v.get("aid", ""))
                     created = v.get("created", 0)
+                    ct = datetime.fromtimestamp(created) if created else None
+                    if date_from and ct and ct.strftime("%Y-%m-%d") < date_from:
+                        page_older_than_from = True
                     items.append(ContentItem(
                         content_id=aid,
                         content_type=ContentType.VIDEO,
                         title=v.get("title", ""),
                         cover_url=v.get("pic", ""),
-                        create_time=datetime.fromtimestamp(created) if created else None,
+                        create_time=ct,
                         duration_sec=self._parse_duration(v.get("length", "0:00")),
                         url=f"https://www.bilibili.com/video/av{aid}",
                         tags=[],
@@ -99,6 +104,15 @@ class BilibiliAdapter(BasePlatformAdapter):
 
                 if len(vlist) < page_size:
                     break
+                if not date_filtering and max_items > 0 and len(items) >= max_items:
+                    break
+                if date_filtering:
+                    # 发布时间倒序：本页出现早于起始日期的视频即可停（更深只会更老）
+                    if page_older_than_from:
+                        break
+                    if max_items > 0 and len(
+                            self._filter_by_date(items, date_from, date_to)) >= max_items:
+                        break
                 page += 1
                 await asyncio.sleep(0.3)
 
@@ -106,11 +120,10 @@ class BilibiliAdapter(BasePlatformAdapter):
                 logger.error(f"Video list page {page} failed: {e}")
                 break
 
+        # ---- 2.5 先过滤日期、再截断数量（顺序不能反，否则范围内条数会不足） ----
+        items = self._filter_by_date(items, date_from, date_to)
         if max_items > 0 and len(items) > max_items:
             items = items[:max_items]
-
-        # ---- 2.5 日期过滤 ----
-        items = self._filter_by_date(items, date_from, date_to)
 
         # ---- 3. 逐视频获取 stat ----
         if items:

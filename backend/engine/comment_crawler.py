@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+import httpx
+
 logger = logging.getLogger("lx_datahunter.comment_crawler")
 
 CHROME_PATHS = [
@@ -30,6 +32,11 @@ CHROME_PATHS = [
 
 DOUYIN_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
              "Chrome/131.0.0.0 Safari/537.36")
+
+# B站 HTTP 接口对 UA 指纹敏感：不完整的 UA（缺 "(KHTML, like Gecko)"）会触发
+# 风控 code=-352，必须用完整浏览器 UA
+BILI_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+           "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
 
 @dataclass
@@ -71,6 +78,9 @@ def parse_bilibili_reply(reply: dict) -> CommentItem:
     )
 
 
+BILI_REPLY_MAIN_URL = "https://api.bilibili.com/x/v2/reply/main"
+
+
 async def crawl_bilibili_comments(
     aid: int,
     max_comments: int = 100,
@@ -78,9 +88,85 @@ async def crawl_bilibili_comments(
 ) -> list[CommentItem]:
     """拉取 B站视频评论，按点赞排序，最多 max_comments 条。
 
-    max_comments <= 0 表示全量爬取：按点赞序翻页直到评论区见底
-    （replies 为空或超过接口返回的总页数），上限 1000 页兜底。
+    优先走 /x/v2/reply/main 游标接口（mode=3 按点赞）：旧 /x/v2/reply?pn=
+    分页接口匿名状态下仅返回前几条热评、翻页即空（2026-09 实测），
+    已不可用；主接口失败时回退旧接口（登录态下仍可用）。
+    max_comments <= 0 表示全量翻到 is_end。
     """
+    headers = {
+        "User-Agent": BILI_UA,
+        "Referer": "https://www.bilibili.com/",
+    }
+    sessdata = getattr(credential, "sessdata", None) if credential else None
+    if sessdata:
+        headers["Cookie"] = f"SESSDATA={sessdata}"
+
+    unlimited = max_comments <= 0
+    items: list[CommentItem] = []
+    seen: set[str] = set()
+    next_cursor = 0
+    first_page = True
+    try:
+        async with httpx.AsyncClient(timeout=15, headers=headers) as client:
+            while unlimited or len(items) < max_comments:
+                data = None
+                for attempt in range(3):
+                    try:
+                        resp = await client.get(BILI_REPLY_MAIN_URL, params={
+                            "oid": aid, "type": 1, "mode": 3,
+                            "next": next_cursor, "ps": 30,
+                        })
+                        data = resp.json()
+                    except Exception as e:
+                        logger.warning(f"Bilibili main comments request failed "
+                                       f"(attempt {attempt + 1}/3) for av{aid}: {e}")
+                        await asyncio.sleep(1.5 * (attempt + 1))
+                        continue
+                    if data.get("code") == 0:
+                        break
+                    # -352 等风控多为瞬态，退避后重试
+                    logger.warning(f"Bilibili main comments code={data.get('code')} "
+                                   f"(attempt {attempt + 1}/3) for av{aid}")
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                if not data or data.get("code") != 0:
+                    break
+                d = data.get("data") or {}
+                batch = list(d.get("replies") or [])
+                if first_page:
+                    # 置顶评论只在首页返回
+                    batch = list(d.get("top_replies") or []) + batch
+                first_page = False
+                if not batch:
+                    break
+                for reply in batch:
+                    c = parse_bilibili_reply(reply)
+                    if c.comment_id and c.comment_id in seen:
+                        continue
+                    seen.add(c.comment_id)
+                    items.append(c)
+                cursor = d.get("cursor") or {}
+                if cursor.get("is_end"):
+                    break
+                new_next = cursor.get("next") or 0
+                if new_next <= next_cursor:
+                    break  # 游标异常，防死循环
+                next_cursor = new_next
+                await asyncio.sleep(0.3)
+    except Exception as e:
+        logger.warning(f"Bilibili main comments failed for av{aid}: {e}")
+
+    if items:
+        return items if unlimited else items[:max_comments]
+    # 主接口一条都没拿到（风控/参数异常）→ 回退旧分页接口
+    return await _crawl_bilibili_comments_legacy(aid, max_comments, credential)
+
+
+async def _crawl_bilibili_comments_legacy(
+    aid: int,
+    max_comments: int = 100,
+    credential=None,
+) -> list[CommentItem]:
+    """旧 /x/v2/reply?pn= 分页接口（SDK 封装）；匿名已基本失效，仅作回退。"""
     from bilibili_api import comment as bili_comment, sync
     from bilibili_api.comment import CommentResourceType, OrderType
 
@@ -89,10 +175,7 @@ async def crawl_bilibili_comments(
     page = 1
     # 每页约 20 条，多取一页余量；全量模式由 replies 空页自然终止
     max_pages = 1000 if unlimited else (max_comments // 20) + 2
-    total_pages = None  # 接口返回的评论总页数（page.count）
     while (unlimited or len(items) < max_comments) and page <= max_pages:
-        if total_pages is not None and page > total_pages:
-            break
         try:
             data = sync(bili_comment.get_comments(
                 oid=aid,
@@ -107,10 +190,6 @@ async def crawl_bilibili_comments(
         replies = (data or {}).get("replies") or []
         if not replies:
             break
-        if total_pages is None:
-            total_pages = ((data or {}).get("page", {}) or {}).get("count")
-            if not isinstance(total_pages, int) or total_pages <= 0:
-                total_pages = None
         for r in replies:
             items.append(parse_bilibili_reply(r))
         page += 1

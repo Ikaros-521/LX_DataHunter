@@ -700,11 +700,13 @@ class ResearchEngine:
         }
         max_videos = int(params.get("max_videos_per_keyword", 15))
         max_pages = int(params.get("max_search_pages", 2))
+        # 候选池放大：搜索按播放量截断后还要过日期过滤，池太小会导致范围内视频数不足
+        pool = max(max_videos * 5, 50)
 
         raw: list[dict] = []
         try:
             if kw.platform == "bilibili":
-                raw = await search_bilibili_videos(kw.keyword, max_videos * 2, max_pages)
+                raw = await search_bilibili_videos(kw.keyword, pool, max_pages)
             elif kw.platform == "douyin":
                 if not cookie_str:
                     section["warnings"].append(
@@ -714,7 +716,7 @@ class ResearchEngine:
                 raw, search_shot = await loop.run_in_executor(
                     None, _run_coro_in_thread, search_douyin_videos(
                         kw.keyword, cookie_str=cookie_str,
-                        max_videos=max_videos * 2, max_pages=max_pages,
+                        max_videos=pool, max_pages=max_pages,
                         screenshot_dir=_assets_dir(task)))
                 if search_shot:
                     section["search_screenshot"] = f"assets/{search_shot}"
@@ -740,7 +742,12 @@ class ResearchEngine:
             return True
 
         if date_from or date_to:
+            before = len(raw)
             raw = [v for v in raw if _in_range(v.get("pub_ts", 0))]
+            if len(raw) < max_videos:
+                section["warnings"].append(
+                    f"时间范围内仅命中 {len(raw)} 条视频（候选 {before} 条，"
+                    f"可放宽时间范围或加大搜索翻页深度）")
         raw = raw[:max_videos]
 
         videos = [{

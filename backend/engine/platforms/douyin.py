@@ -120,12 +120,15 @@ class DouyinAdapter(BasePlatformAdapter):
 
             # Scroll for more
             logger.info("Starting scroll to load more videos...")
+            date_filtering = bool(date_from or date_to)
+            # 带日期过滤时多捞再过滤，避免先截断后过滤导致范围内数量不足
+            scroll_target = max_items * 5 if date_filtering and max_items > 0 else max_items
             prev_total = 0
             no_new = 0
-            for i in range(20):
+            for i in range(30 if date_filtering else 20):
                 current_total = sum(len(d.get("aweme_list", [])) for d in xhr_data)
-                if max_items > 0 and current_total >= max_items:
-                    logger.info(f"Reached max_items={max_items}, stopping scroll")
+                if max_items > 0 and current_total >= scroll_target:
+                    logger.info(f"Reached scroll target={scroll_target}, stopping scroll")
                     break
                 if current_total == prev_total:
                     no_new += 1
@@ -136,7 +139,7 @@ class DouyinAdapter(BasePlatformAdapter):
                     no_new = 0
                 prev_total = current_total
                 if i % 3 == 0:
-                    logger.info(f"Scroll {i+1}/20: {current_total} videos captured so far")
+                    logger.info(f"Scroll {i+1}: {current_total} videos captured so far")
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 await asyncio.sleep(2)
 
@@ -144,7 +147,7 @@ class DouyinAdapter(BasePlatformAdapter):
             await browser.close()
 
         # Extract creator info from first aweme
-        items = self._parse_xhr_data(xhr_data, max_items)
+        items = self._parse_xhr_data(xhr_data, scroll_target)
         logger.info(f"Parsed {len(items)} content items from {len(xhr_data)} XHR responses")
         for d in xhr_data:
             for aweme in d.get("aweme_list", []):
@@ -161,13 +164,15 @@ class DouyinAdapter(BasePlatformAdapter):
             if creator_info.nickname:
                 break
 
-        # 日期过滤
+        # 日期过滤（先过滤、后截断，顺序不能反，否则范围内条数会不足）
         if date_from or date_to:
             items = [i for i in items if (
                 i.create_time is None
                 or (not date_from or i.create_time.strftime("%Y-%m-%d") >= date_from)
                 and (not date_to or i.create_time.strftime("%Y-%m-%d") <= date_to)
             )]
+        if max_items > 0 and len(items) > max_items:
+            items = items[:max_items]
 
         return creator_info, items
 

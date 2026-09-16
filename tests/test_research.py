@@ -373,9 +373,9 @@ def test_crawl_bilibili_comments_unlimited(monkeypatch):
     calls: list[int] = []
     _patch_bilibili_pages(monkeypatch, pages, calls)
 
-    items = asyncio.run(cc.crawl_bilibili_comments(123, 0))
+    items = asyncio.run(cc._crawl_bilibili_comments_legacy(123, 0))
     assert len(items) == 25  # 两页全取，不做截断
-    assert calls == [1, 2]   # 总页数 2，翻完即止
+    assert calls == [1, 2, 3]  # 第三页空 replies 自然终止
 
 
 def test_crawl_bilibili_comments_limited(monkeypatch):
@@ -389,9 +389,82 @@ def test_crawl_bilibili_comments_limited(monkeypatch):
     calls: list[int] = []
     _patch_bilibili_pages(monkeypatch, pages, calls)
 
-    items = asyncio.run(cc.crawl_bilibili_comments(123, 25))
+    items = asyncio.run(cc._crawl_bilibili_comments_legacy(123, 25))
     assert len(items) == 25
     assert calls == [1, 2]  # 25 条两页取满，不再翻第三页
+
+
+# ---- B站评论 main 游标接口 ----
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+class _FakeAsyncClient:
+    """按顺序吐出预设页面的假 httpx.AsyncClient。"""
+    pages: list[dict] = []
+
+    def __init__(self, *args, **kwargs):
+        self._i = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def get(self, url, params=None):
+        page = self.pages[min(self._i, len(self.pages) - 1)]
+        self._i += 1
+        return _FakeResp(page)
+
+
+def _main_page(rpids, next_, is_end, top=()):
+    return {"code": 0, "data": {
+        "replies": [_fake_reply(i) for i in rpids],
+        "top_replies": [_fake_reply(i) for i in top],
+        "cursor": {"next": next_, "is_end": is_end, "all_count": 7028},
+    }}
+
+
+def test_crawl_bilibili_comments_main_api(monkeypatch):
+    import asyncio
+    import httpx
+    import backend.engine.comment_crawler as cc
+
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
+
+    _FakeAsyncClient.pages = [
+        _main_page(range(30), next_=2, is_end=False, top=(999,)),   # 首页含置顶
+        _main_page(range(30, 35), next_=3, is_end=True),
+    ]
+    unlimited = asyncio.run(cc.crawl_bilibili_comments(1, 0))
+    assert len(unlimited) == 36  # 30 + 置顶1 + 5，含全部
+
+    _FakeAsyncClient.pages = [_main_page(range(30), next_=2, is_end=False, top=(999,))]
+    limited = asyncio.run(cc.crawl_bilibili_comments(1, 10))
+    assert len(limited) == 10
+
+
+def test_crawl_bilibili_comments_main_api_fallback(monkeypatch):
+    """主接口拿不到数据时回退 legacy 路径。"""
+    import asyncio
+    import httpx
+    import backend.engine.comment_crawler as cc
+
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
+    _FakeAsyncClient.pages = [{"code": -412, "message": "blocked"}]
+
+    legacy_pages = [{"replies": [_fake_reply(i) for i in range(5)], "page": {"count": 1}}]
+    calls: list[int] = []
+    _patch_bilibili_pages(monkeypatch, legacy_pages, calls)
+
+    items = asyncio.run(cc.crawl_bilibili_comments(1, 0))
+    assert len(items) == 5  # legacy 兜底返回
 
 
 # ---- B站弹幕解析 / 抓取（限量与全量）----
