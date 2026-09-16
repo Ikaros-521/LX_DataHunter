@@ -341,7 +341,7 @@ function ResearchLauncher() {
             <InputNumber min={1} max={10} style={{ width: 60 }} />
           </Form.Item>
         )}
-        <Form.Item name="all_videos" label="爬评论视频">
+        <Form.Item name="all_videos" label="爬评论视频" valuePropName="checked">
           <Switch checkedChildren="全部" unCheckedChildren="Top N"
             onChange={setAllVideos} />
         </Form.Item>
@@ -350,7 +350,7 @@ function ResearchLauncher() {
             <InputNumber min={1} max={50} style={{ width: 60 }} />
           </Form.Item>
         )}
-        <Form.Item name="all_comments" label="评论全爬"
+        <Form.Item name="all_comments" label="评论全爬" valuePropName="checked"
           tooltip="开启后每条视频爬取全部评论，不做条数限制">
           <Switch checkedChildren="全爬" unCheckedChildren="限量"
             onChange={setAllComments} />
@@ -360,7 +360,7 @@ function ResearchLauncher() {
             <InputNumber min={1} max={500} style={{ width: 70 }} />
           </Form.Item>
         )}
-        <Form.Item name="danmaku" label="弹幕存库"
+        <Form.Item name="danmaku" label="弹幕存库" valuePropName="checked"
           tooltip="B站视频的原始弹幕全量抓取并存入数据库，供后续分析使用（抖音无弹幕）">
           <Switch checkedChildren="开" unCheckedChildren="关" />
         </Form.Item>
@@ -405,7 +405,7 @@ function ScheduleCard() {
           days: sched.params?.days ?? 30,
         }}
         style={{ gap: 8 }}>
-        <Form.Item name="enabled" label="启用">
+        <Form.Item name="enabled" label="启用" valuePropName="checked">
           <Switch />
         </Form.Item>
         <Form.Item name="interval_minutes" label="间隔（分钟）"
