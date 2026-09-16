@@ -133,6 +133,8 @@ def _section_md(s: dict) -> str:
         stats_bits.append(f"抓取评论 **{s.get('comment_count', 0)}** 条")
     if s.get("danmaku_count"):
         stats_bits.append(f"原始弹幕存库 **{s.get('danmaku_count', 0)}** 条（可供后续分析）")
+    if s.get("llm_filtered_out"):
+        stats_bits.append(f"LLM 相关性筛选剔除 **{s.get('llm_filtered_out', 0)}** 条不相关视频")
     if stats_bits:
         parts.append("- " + "\n- ".join([f"数据摘要：{stats_bits[0]}"] + stats_bits[1:]) + "\n")
 
@@ -264,6 +266,8 @@ def _keyword_section_md(s: dict) -> str:
         meta_bits.append(f"抓取评论 **{s.get('comment_count', 0)}** 条")
     if s.get("danmaku_count"):
         meta_bits.append(f"原始弹幕存库 **{s.get('danmaku_count', 0)}** 条（可供后续分析）")
+    if s.get("llm_filtered_out"):
+        meta_bits.append(f"LLM 相关性筛选剔除 **{s.get('llm_filtered_out', 0)}** 条不相关视频")
     if meta_bits:
         parts.append("- " + "\n- ".join(meta_bits) + "\n")
 

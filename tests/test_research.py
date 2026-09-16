@@ -503,8 +503,48 @@ def test_crawl_bilibili_danmakus(monkeypatch):
         return raw
 
     monkeypatch.setattr(bv.Video, "get_danmakus", fake_get_danmakus)
-    assert len(asyncio.run(cc.crawl_bilibili_danmakus(1, 0))) == 5   # 全量 + 去重
-    assert len(asyncio.run(cc.crawl_bilibili_danmakus(1, 3))) == 3   # 限量截断
+    items, err = asyncio.run(cc.crawl_bilibili_danmakus(1, 0))
+    assert err == "" and len(items) == 5   # 全量 + 去重
+    items, err = asyncio.run(cc.crawl_bilibili_danmakus(1, 3))
+    assert err == "" and len(items) == 3   # 限量截断
+
+
+def test_crawl_bilibili_danmakus_permission_denied(monkeypatch):
+    """-403（充电专属等）应转成友好错误说明而不是异常。"""
+    import asyncio
+    import bilibili_api.video as bv
+    import backend.engine.comment_crawler as cc
+
+    async def denied(self, **kwargs):
+        raise RuntimeError("接口返回错误代码：-403，信息：访问权限不足。")
+
+    monkeypatch.setattr(bv.Video, "get_danmakus", denied)
+    items, err = asyncio.run(cc.crawl_bilibili_danmakus(6506, 0))
+    assert items == []
+    assert "无弹幕访问权限" in err
+
+
+# ---- LLM 视频筛选 prompt / 解析 ----
+
+def test_build_video_filter_prompt():
+    from backend.engine.llm_client import build_video_filter_prompt
+    system, user = build_video_filter_prompt("关键词「AI剪辑」的赛道内容",
+                                             [(1, "AI剪辑神器测评"), (2, "我的一天vlog")])
+    assert "调研主题" in user and "AI剪辑神器测评" in user
+    assert "JSON" in system or "JSON" in user
+
+
+def test_parse_keep_indexes():
+    from backend.engine.llm_client import parse_keep_indexes
+    valid = {1, 2, 3, 4}
+    assert parse_keep_indexes('{"keep": [1, 3], "reason": "ok"}', valid) == {1, 3}
+    # 包裹在 markdown 代码块或前后有杂文时容错提取
+    assert parse_keep_indexes('好的，结果：```json\n{"keep": [2]}\n``` 以上', valid) == {2}
+    # 越界/非法编号被丢弃
+    assert parse_keep_indexes('{"keep": [1, 9, "x"]}', valid) == {1}
+    # 解析失败返回 None
+    assert parse_keep_indexes('抱歉无法判断', valid) is None
+    assert parse_keep_indexes('{"keep": "all"}', valid) is None
 
 
 def test_report_danmaku_count_line():

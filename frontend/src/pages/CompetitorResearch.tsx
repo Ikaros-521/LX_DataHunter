@@ -306,6 +306,7 @@ function ResearchLauncher() {
       top_videos_for_comments: v.all_videos ? -1 : v.top_videos,
       max_comments_per_video: v.all_comments ? -1 : v.max_comments,
       crawl_danmaku: v.danmaku,
+      llm_filter_videos: v.llm_filter,
       ...(mode === 'accounts'
         ? { max_videos_per_competitor: v.max_videos }
         : { max_videos_per_keyword: v.max_videos, max_search_pages: v.max_pages }),
@@ -319,7 +320,7 @@ function ResearchLauncher() {
   return (
     <Card title="发起竞品调研" size="small" style={{ marginBottom: 16 }}>
       <Form form={form} layout="inline"
-        initialValues={{ max_videos: 8, max_pages: 2, all_videos: true, top_videos: 5, all_comments: false, max_comments: 100, danmaku: true }}
+        initialValues={{ max_videos: 8, max_pages: 2, all_videos: true, top_videos: 5, all_comments: false, max_comments: 100, danmaku: true, llm_filter: true }}
         style={{ flexWrap: 'wrap', gap: 8 }}>
         <Form.Item>
           <Radio.Group value={mode} onChange={e => setMode(e.target.value)}
@@ -374,6 +375,10 @@ function ResearchLauncher() {
         )}
         <Form.Item name="danmaku" label="弹幕存库" valuePropName="checked"
           tooltip="B站视频的原始弹幕全量抓取并存入数据库，供后续分析使用（抖音无弹幕）">
+          <Switch checkedChildren="开" unCheckedChildren="关" />
+        </Form.Item>
+        <Form.Item name="llm_filter" label="LLM 筛选视频" valuePropName="checked"
+          tooltip="爬取评论/弹幕前，先用大模型按视频标题筛掉与调研主题不相关的内容（如蹭词、无关题材），只对相关视频做深度分析">
           <Switch checkedChildren="开" unCheckedChildren="关" />
         </Form.Item>
         <Form.Item name="title">

@@ -207,6 +207,56 @@ def build_comment_insight_prompt(creator_desc: str, comments_text: str) -> tuple
     return system, user
 
 
+def build_video_filter_prompt(focus: str, titles: list[tuple[int, str]]) -> tuple[str, str]:
+    """调研前视频相关性筛选 (system, user) prompt。
+
+    focus 为调研主题（关键词模式=赛道关键词；账号模式=竞品备注名）；
+    titles 为 [(编号, 视频标题)]。要求 LLM 返回 {"keep": [编号]} JSON，
+    仅保留与主题相关的视频，剔除蹭词/无关内容。
+    """
+    system = (
+        "你是内容调研助手，负责从搜索/账号视频列表中筛选与调研主题"
+        "相关的视频。判断仅基于标题：蹭热词但主题不符、纯娱乐无关内容、"
+        "与主题无关的生活记录等都应剔除；标题含义模糊时保守保留。"
+        "只输出 JSON，不要输出其他内容。"
+    )
+    lines = "\n".join(f"{idx} | {title[:60]}" for idx, title in titles)
+    user = (
+        f"调研主题：{focus}\n\n"
+        f"候选视频列表（编号 | 标题）：\n{lines}\n\n"
+        '请返回与主题相关的视频编号，格式：{"keep": [编号, 编号, ...]，'
+        '"reason": "一句话剔除理由"}\n'
+        "只输出该 JSON。"
+    )
+    return system, user
+
+
+def parse_keep_indexes(text: str, valid: set[int]) -> set[int] | None:
+    """解析 LLM 筛选返回的 {"keep": [...]}，容错提取 JSON。
+
+    返回保留编号集合（与 valid 求交后的合法子集）；
+    解析失败或 keep 缺失返回 None（调用方应视为筛选失败、保留全部）。
+    """
+    import re
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(0))
+    except ValueError:
+        return None
+    keep = obj.get("keep") if isinstance(obj, dict) else None
+    if not isinstance(keep, list):
+        return None
+    result: set[int] = set()
+    for i in keep:
+        try:
+            result.add(int(i))
+        except (TypeError, ValueError):
+            continue  # 混入的非法编号跳过
+    return result & valid
+
+
 class LlmClient:
     """OpenAI 兼容 /chat/completions 客户端。"""
 

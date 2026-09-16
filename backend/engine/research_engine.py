@@ -31,6 +31,7 @@ from .hot_crawler import _run_coro_in_thread
 from .llm_client import (
     LlmClient, build_comment_insight_prompt, build_competitor_content_prompt,
     build_keyword_content_prompt, build_market_overview_prompt,
+    build_video_filter_prompt, parse_keep_indexes,
 )
 from .platforms import get_adapter
 from .platforms.bilibili import _make_credential
@@ -288,7 +289,7 @@ class ResearchEngine:
                 P_COMMENT_START + (P_COMMENT_END - P_COMMENT_START) * i / n,
             )
             await self._collect_comments(db, task, comp, section, params,
-                                         cookies.get(comp.platform))
+                                         cookies.get(comp.platform), llm, llm_ready)
 
         # ---- 阶段三：LLM 分析 ----
         await self._notify(db, task, ResearchStatus.ANALYZING.value,
@@ -374,7 +375,7 @@ class ResearchEngine:
                 P_COMMENT_START + (P_COMMENT_END - P_COMMENT_START) * i / n,
             )
             await self._collect_keyword_comments(db, task, section, params,
-                                                 cookies.get(kw.platform))
+                                                 cookies.get(kw.platform), llm, llm_ready)
 
         # ---- 阶段三：LLM 分析 ----
         await self._notify(db, task, ResearchStatus.ANALYZING.value,
@@ -466,11 +467,13 @@ class ResearchEngine:
         return section
 
     async def _collect_comments(self, db, task: ResearchTask, comp: Competitor,
-                                section: dict, params: dict, cookie_str: str | None):
+                                section: dict, params: dict, cookie_str: str | None,
+                                llm: LlmClient, llm_ready: bool):
         """选视频爬评论 + 截图，评论落库 ResearchComment。
 
         top_videos_for_comments：-1=全部视频，0=不爬，>0=互动量 Top N；
         max_comments_per_video：-1=全量爬取，>0=每视频上限。
+        爬取前可用 LLM 按标题筛掉与调研主题不相关的视频。
         """
         videos = section.get("videos") or []
         top_k = int(params.get("top_videos_for_comments", -1))
@@ -480,13 +483,18 @@ class ResearchEngine:
                 section["warnings"].append("无视频可爬评论（时间范围内无内容或抓取失败）")
             return
 
+        focus = (comp.name or "").strip()
+        videos = await self._filter_videos_by_llm(
+            llm, llm_ready, focus, videos, params, section)
+
         ranked = sorted(videos, key=lambda v: v["likes"] + v["comments"], reverse=True)
         picked = ranked if top_k < 0 else ranked[:top_k]
 
         all_comments: list[CommentItem] = []
         if comp.platform == "bilibili":
             cred = _make_credential(cookie_str)
-            for v in picked:
+            fails = 0
+            for j, v in enumerate(picked):
                 try:
                     comments = await crawl_bilibili_comments(
                         int(v["content_id"]), max_comments, credential=cred)
@@ -495,9 +503,15 @@ class ResearchEngine:
                     all_comments.extend(comments)
                 except Exception as e:
                     logger.warning(f"Bilibili comments failed for av{v['content_id']}: {e}")
+                    fails += 1
+                if j < len(picked) - 1:
+                    await asyncio.sleep(1.0)  # 视频间限速，降低连环风控概率
+            if fails:
+                section["warnings"].append(
+                    f"{fails} 个视频评论抓取失败（风控或网络），已跳过")
             # 原始弹幕全量存库（独立于评论，供后续分析复用）
             section["danmaku_count"] = await self._crawl_and_store_danmakus(
-                db, task, comp.id, picked, params, cred)
+                db, task, comp.id, picked, params, cred, section)
             # B站截图（Playwright，独立线程）
             try:
                 assets = _assets_dir(task)
@@ -588,21 +602,62 @@ class ResearchEngine:
             db.add_all(rows)
             await db.commit()
 
+    async def _filter_videos_by_llm(self, llm: LlmClient, llm_ready: bool,
+                                    focus: str, videos: list[dict],
+                                    params: dict, section: dict) -> list[dict]:
+        """爬取前用 LLM 按标题筛选与调研主题相关的视频。
+
+        focus 为空、LLM 未配置、开关关闭或调用失败时原样返回（不阻断）；
+        LLM 判定全部不相关时保守保留全部。剔除数记入 section 供报告展示。
+        """
+        if not params.get("llm_filter_videos", True):
+            return videos
+        if not llm_ready or not focus or len(videos) < 2:
+            return videos
+
+        titles = [(i, v.get("title") or "") for i, v in enumerate(videos, 1)]
+        try:
+            system, user = build_video_filter_prompt(focus, titles)
+            text = await self._chat_with_retry(llm, system, user, retries=2)
+        except Exception as e:
+            logger.warning(f"LLM video filter failed: {e}")
+            section["warnings"].append("LLM 视频筛选失败，已保留全部视频")
+            return videos
+
+        keep = parse_keep_indexes(text, valid={i for i, _ in titles})
+        if keep is None:
+            section["warnings"].append("LLM 视频筛选结果解析失败，已保留全部视频")
+            return videos
+        if not keep:
+            section["warnings"].append("LLM 判定全部视频与主题不相关，已保留全部视频")
+            return videos
+        kept = [v for i, v in enumerate(videos, 1) if i in keep]
+        removed = len(videos) - len(kept)
+        if removed:
+            logger.info(f"LLM filter: removed {removed}/{len(videos)} videos for '{focus}'")
+        section["llm_filtered_out"] = removed
+        return kept
+
     async def _crawl_and_store_danmakus(self, db, task: ResearchTask, owner_id: int,
-                                        picked: list[dict], params: dict, cred) -> int:
+                                        picked: list[dict], params: dict, cred,
+                                        section: dict) -> int:
         """B站视频原始弹幕抓取并落库 ResearchDanmaku（重跑先清旧），返回条数。
 
         owner_id：账号模式为竞品 id，关键词模式为 keyword id。
         弹幕仅作为原始数据存储供后续分析复用，不参与本报告的 LLM 分析。
+        单视频失败（-403 权限/风控）不阻断，记入 section warnings。
         """
         if not params.get("crawl_danmaku", True) or not picked:
             return 0
         max_dm = int(params.get("max_danmakus_per_video", -1))
         rows: list[ResearchDanmaku] = []
-        for v in picked:
+        fails: list[str] = []
+        for j, v in enumerate(picked):
             try:
-                dms = await crawl_bilibili_danmakus(
+                dms, err = await crawl_bilibili_danmakus(
                     int(v["content_id"]), max_dm, credential=cred)
+                if err:
+                    fails.append(f"《{v.get('title', '')[:24]}》{err}")
                 rows.extend(ResearchDanmaku(
                     research_task_id=task.id,
                     competitor_id=owner_id,
@@ -620,6 +675,9 @@ class ResearchEngine:
                 ) for d in dms)
             except Exception as e:
                 logger.warning(f"Bilibili danmaku failed for av{v['content_id']}: {e}")
+                fails.append(f"《{v.get('title', '')[:24]}》弹幕抓取异常")
+            if j < len(picked) - 1:
+                await asyncio.sleep(1.0)  # 视频间限速，降低连环风控概率
         if rows:
             await db.execute(delete(ResearchDanmaku).where(
                 ResearchDanmaku.research_task_id == task.id,
@@ -627,6 +685,10 @@ class ResearchEngine:
             ))
             db.add_all(rows)
             await db.commit()
+        if fails:
+            section["warnings"].append(
+                f"{len(fails)} 个视频弹幕抓取失败：{'；'.join(fails[:3])}"
+                + ("等" if len(fails) > 3 else ""))
         return len(rows)
 
     async def _chat_with_retry(self, llm: LlmClient, system: str, user: str,
@@ -793,11 +855,13 @@ class ResearchEngine:
         return section
 
     async def _collect_keyword_comments(self, db, task: ResearchTask, section: dict,
-                                        params: dict, cookie_str: str | None):
+                                        params: dict, cookie_str: str | None,
+                                        llm: LlmClient, llm_ready: bool):
         """关键词模式：视频爬评论 + 截图，评论落库。
 
         top_videos_for_comments：-1=全部视频，0=不爬，>0=互动量 Top N；
         max_comments_per_video：-1=全量爬取，>0=每视频上限。
+        爬取前用 LLM 按标题筛掉与赛道关键词不相关的搜索结果。
         """
         videos = section.get("videos") or []
         top_k = int(params.get("top_videos_for_comments", -1))
@@ -807,13 +871,18 @@ class ResearchEngine:
                 section["warnings"].append("关键词下无视频，评论与截图跳过")
             return
 
+        focus = f"关键词「{section.get('keyword', '')}」的赛道内容"
+        videos = await self._filter_videos_by_llm(
+            llm, llm_ready, focus, videos, params, section)
+
         ranked = sorted(videos, key=lambda v: v["likes"] + v["comments"], reverse=True)
         picked = ranked if top_k < 0 else ranked[:top_k]
         all_comments: list[CommentItem] = []
         platform = section.get("platform")
 
         if platform == "bilibili":
-            for v in picked:
+            fails = 0
+            for j, v in enumerate(picked):
                 try:
                     comments = await crawl_bilibili_comments(
                         int(v["content_id"]), max_comments, credential=_make_credential(cookie_str))
@@ -822,9 +891,15 @@ class ResearchEngine:
                     all_comments.extend(comments)
                 except Exception as e:
                     logger.warning(f"Bilibili comments failed for av{v['content_id']}: {e}")
+                    fails += 1
+                if j < len(picked) - 1:
+                    await asyncio.sleep(1.0)  # 视频间限速，降低连环风控概率
+            if fails:
+                section["warnings"].append(
+                    f"{fails} 个视频评论抓取失败（风控或网络），已跳过")
             section["danmaku_count"] = await self._crawl_and_store_danmakus(
                 db, task, section.get("keyword_id", 0), picked, params,
-                _make_credential(cookie_str))
+                _make_credential(cookie_str), section)
             try:
                 from urllib.parse import quote
                 assets = _assets_dir(task)

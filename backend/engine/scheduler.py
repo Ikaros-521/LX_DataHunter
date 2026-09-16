@@ -47,6 +47,7 @@ async def run_scheduled_research():
             "max_search_pages": int(cfg.get("max_search_pages", 2)),
             "crawl_danmaku": bool(cfg.get("crawl_danmaku", True)),
             "max_danmakus_per_video": int(cfg.get("max_danmakus_per_video", -1)),
+            "llm_filter_videos": bool(cfg.get("llm_filter_videos", True)),
         }
         if mode == "keyword":
             ids = (await db.execute(

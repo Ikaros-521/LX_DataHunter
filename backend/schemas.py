@@ -426,6 +426,7 @@ class ResearchCreateRequest(BaseModel):
     max_search_pages: int = Field(default=2, ge=1, le=10, description="关键词模式：搜索翻页深度（B站每页42条）")
     crawl_danmaku: bool = Field(default=True, description="是否抓取B站视频原始弹幕并存库（抖音无弹幕，自动跳过）")
     max_danmakus_per_video: int = Field(default=-1, ge=-1, le=10000, description="每视频弹幕抓取数：-1=全量，>0=上限条数")
+    llm_filter_videos: bool = Field(default=True, description="爬取前用 LLM 按标题筛选与调研主题相关的视频（LLM 未配置时自动跳过）")
 
 
 class ResearchTaskResponse(BaseModel):

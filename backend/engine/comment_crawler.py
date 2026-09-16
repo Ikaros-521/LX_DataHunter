@@ -118,16 +118,19 @@ async def crawl_bilibili_comments(
                         })
                         data = resp.json()
                     except Exception as e:
-                        logger.warning(f"Bilibili main comments request failed "
-                                       f"(attempt {attempt + 1}/3) for av{aid}: {e}")
-                        await asyncio.sleep(1.5 * (attempt + 1))
+                        # 非 JSON 响应（412 风控页等）
+                        status = getattr(resp, "status_code", "?")
+                        logger.warning(
+                            f"Bilibili main comments non-json http={status} "
+                            f"(attempt {attempt + 1}/3) for av{aid}: {type(e).__name__}")
+                        await asyncio.sleep(3.0 * (attempt + 1))
                         continue
                     if data.get("code") == 0:
                         break
-                    # -352 等风控多为瞬态，退避后重试
+                    # -352/-412 等风控码多为瞬态，退避后重试
                     logger.warning(f"Bilibili main comments code={data.get('code')} "
                                    f"(attempt {attempt + 1}/3) for av{aid}")
-                    await asyncio.sleep(1.5 * (attempt + 1))
+                    await asyncio.sleep(3.0 * (attempt + 1))
                 if not data or data.get("code") != 0:
                     break
                 d = data.get("data") or {}
@@ -157,7 +160,8 @@ async def crawl_bilibili_comments(
 
     if items:
         return items if unlimited else items[:max_comments]
-    # 主接口一条都没拿到（风控/参数异常）→ 回退旧分页接口
+    # 主接口一条都没拿到（风控/参数异常）→ 等待冷却后回退旧分页接口
+    await asyncio.sleep(2.0)
     return await _crawl_bilibili_comments_legacy(aid, max_comments, credential)
 
 
@@ -249,9 +253,12 @@ async def crawl_bilibili_danmakus(
     aid: int,
     max_danmakus: int = -1,
     credential=None,
-) -> list[DanmakuItem]:
+) -> tuple[list[DanmakuItem], str]:
     """拉取 B站视频当前弹幕池弹幕（全量），最多 max_danmakus 条。
 
+    返回 (弹幕列表, 错误说明)。错误说明为空表示成功；
+    -403（充电专属/权限内容）等无法重试的错误转成友好文案，
+    调用方可据此跳过该视频并在报告中说明。
     max_danmakus <= 0 表示不限量（弹幕接口按 6 分钟分段一次取全，
     本身即全量返回，这里只做条数截断与去重）。
     """
@@ -261,8 +268,12 @@ async def crawl_bilibili_danmakus(
     try:
         raw = sync(v.get_danmakus())
     except Exception as e:
+        msg = str(e)
+        if "-403" in msg:
+            logger.info(f"Bilibili danmakus permission denied for av{aid}: {msg}")
+            return [], "无弹幕访问权限（可能为充电专属/受限内容）"
         logger.warning(f"Bilibili danmakus failed for av{aid}: {e}")
-        return []
+        return [], f"弹幕接口异常：{msg[:120]}"
 
     seen: set[str] = set()
     unique: list[DanmakuItem] = []
@@ -274,7 +285,8 @@ async def crawl_bilibili_danmakus(
             continue
         seen.add(item.danmaku_id)
         unique.append(item)
-    return unique if max_danmakus <= 0 else unique[:max_danmakus]
+    items = unique if max_danmakus <= 0 else unique[:max_danmakus]
+    return items, ""
 
 
 # --------------------------------------------------------------------------
