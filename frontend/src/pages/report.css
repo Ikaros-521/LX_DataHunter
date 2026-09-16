@@ -1,0 +1,65 @@
+/* 调研报告 markdown 渲染样式（由 ResearchReportView.tsx 引入）。
+ * 注意：应用未引入全局 index.css（其中为 Vite 模板遗留的激进全局样式），
+ * 本页样式必须自包含，不依赖 :root 变量。 */
+.report-markdown {
+  text-align: left;
+  line-height: 1.7;
+  color: rgba(0, 0, 0, 0.88);
+  font-size: 14px;
+}
+.report-markdown h1,
+.report-markdown h2,
+.report-markdown h3,
+.report-markdown h4 {
+  text-align: left;
+  margin: 20px 0 8px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.88);
+}
+.report-markdown h1 { font-size: 24px; }
+.report-markdown h2 {
+  font-size: 20px;
+  border-bottom: 1px solid #e5e4e7;
+  padding-bottom: 6px;
+}
+.report-markdown h3 { font-size: 17px; }
+.report-markdown h4 { font-size: 15px; }
+.report-markdown p { margin: 8px 0; }
+.report-markdown ul,
+.report-markdown ol { padding-left: 22px; margin: 8px 0; }
+.report-markdown li { margin: 2px 0; }
+.report-markdown blockquote {
+  margin: 8px 0;
+  padding: 6px 12px;
+  border-left: 3px solid #b37feb;
+  background: #faf5ff;
+  border-radius: 4px;
+  color: rgba(0, 0, 0, 0.65);
+}
+.report-markdown hr {
+  border: none;
+  border-top: 1px solid #e5e4e7;
+  margin: 16px 0;
+}
+.report-markdown table {
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+.report-markdown th,
+.report-markdown td {
+  border: 1px solid #d9d9d9;
+  padding: 6px 10px;
+  font-size: 14px;
+  text-align: left;
+}
+.report-markdown th {
+  background: #fafafa;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.report-markdown td { white-space: nowrap; }
+.report-markdown td:first-child,
+.report-markdown th:first-child {
+  white-space: normal;
+  min-width: 120px;
+}

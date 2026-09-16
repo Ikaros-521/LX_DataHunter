@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Button, Descriptions, Progress, Space, Tabs, Tag, Tooltip, message, Alert } from 'antd';
 import { ArrowLeftOutlined, ReloadOutlined, DeleteOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   useAnalysisDetail, useRetryAnalysis, useDeleteAnalysis,
 } from '../api/queries';
@@ -62,15 +63,15 @@ export default function VideoAnalysisDetail() {
           items={[
             ...(a.enabled_tasks?.includes('summary') ? [{
               key: 'summary', label: '内容总结',
-              children: <ReactMarkdown>{a.content_summary || '（空）'}</ReactMarkdown>,
+              children: <ReactMarkdown remarkPlugins={[remarkGfm]}>{a.content_summary || '（空）'}</ReactMarkdown>,
             }] : []),
             ...(a.enabled_tasks?.includes('script') ? [{
               key: 'script', label: '脚本与制作手法',
-              children: <ReactMarkdown>{a.script_analysis || '（空）'}</ReactMarkdown>,
+              children: <ReactMarkdown remarkPlugins={[remarkGfm]}>{a.script_analysis || '（空）'}</ReactMarkdown>,
             }] : []),
             ...(a.enabled_tasks?.includes('knowledge') ? [{
               key: 'knowledge', label: '视频知识总结',
-              children: <ReactMarkdown>{a.knowledge_summary || '（空）'}</ReactMarkdown>,
+              children: <ReactMarkdown remarkPlugins={[remarkGfm]}>{a.knowledge_summary || '（空）'}</ReactMarkdown>,
             }] : []),
             { key: 'transcript', label: `逐字稿 (${a.asr_segments.length})`, children: (
               <div>

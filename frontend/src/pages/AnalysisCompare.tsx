@@ -9,6 +9,7 @@ import {
   SendOutlined, MessageOutlined, DeleteOutlined,
 } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   useAnalysisBatchDetail, useAnalysisDigest,
   type VideoAnalysis, type ChatMessage,
@@ -137,7 +138,7 @@ export default function AnalysisCompare() {
         <Button size="small" type="text" icon={<CopyOutlined />}
           onClick={() => copyText(text, label)}>复制</Button>
       </div>
-      <ReactMarkdown>{text || '（空）'}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text || '（空）'}</ReactMarkdown>
     </div>
   );
 

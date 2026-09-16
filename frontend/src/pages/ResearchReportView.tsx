@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button, Card, Progress, Space, Spin, Tag, Typography, message } from 'antd';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import './report.css';
 import { fetchReportMarkdown, useResearchDetail } from '../api/queries';
 
 const { Title, Text } = Typography;
@@ -63,8 +65,9 @@ export default function ResearchReportView() {
 
       {completed && (
         <Card loading={mdLoading}>
-          <div className="markdown-body" style={{ maxWidth: 980 }}>
+          <div className="report-markdown" style={{ maxWidth: 980 }}>
             <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
               components={{
                 img: ({ src, alt, ...props }: any) => {
                   let s = String(src || '');
@@ -81,8 +84,7 @@ export default function ResearchReportView() {
                 ),
                 table: ({ children }: any) => (
                   <div style={{ overflowX: 'auto' }}>
-                    <table style={{ borderCollapse: 'collapse', width: '100%' }}
-                      className="research-md-table">{children}</table>
+                    <table>{children}</table>
                   </div>
                 ),
               }}>
