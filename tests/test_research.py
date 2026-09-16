@@ -98,10 +98,13 @@ def test_parse_douyin_search_payload():
             {"aweme_list": [
                 {"aweme_info": {
                     "desc": "超好用的剪辑技巧",
+                    "create_time": 1788699600,
+                    "statistics": {"play_count": 250000},
                     "author": {"sec_uid": "SEC1", "nickname": "竞品A",
                                "signature": "专注剪辑", "follower_count": 120000},
                 }},
                 {"desc": "裸结构(无 aweme_info 层)",
+                 "create_time": 1788600000,
                  "author": {"sec_uid": "SEC2", "nickname": "竞品B"}},
             ]},
         ],
@@ -111,7 +114,10 @@ def test_parse_douyin_search_payload():
     assert len(hits) == 2
     assert hits[0]["sec_uid"] == "SEC1"
     assert hits[0]["follower_count"] == 120000
+    assert hits[0]["create_time"] == 1788699600
+    assert hits[0]["plays"] == 250000
     assert hits[1]["sec_uid"] == "SEC2"
+    assert hits[1]["plays"] == 0  # 无 statistics 时默认 0
 
 
 def test_parse_douyin_search_payload_empty():

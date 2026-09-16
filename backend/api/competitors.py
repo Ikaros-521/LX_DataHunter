@@ -138,7 +138,8 @@ async def discover(body: DiscoverRequest, db: AsyncSession = Depends(get_db)):
 
     message = ""
     if platform == "bilibili":
-        candidates = await discover_bilibili(keyword, body.max_items)
+        candidates = await discover_bilibili(keyword, body.max_items,
+                                             max_pages=body.max_pages)
         if not candidates:
             message = "搜索无结果或接口失败，可稍后重试"
     elif platform == "douyin":
@@ -147,7 +148,8 @@ async def discover(body: DiscoverRequest, db: AsyncSession = Depends(get_db)):
         loop = asyncio.get_running_loop()
         candidates = await loop.run_in_executor(
             None, _run_coro_in_thread,
-            discover_douyin(keyword, cookie_str=cookie_str, max_items=body.max_items))
+            discover_douyin(keyword, cookie_str=cookie_str, max_items=body.max_items,
+                            max_pages=body.max_pages))
         if not candidates:
             message = ("抖音搜索需要登录：请在「凭证管理」保存抖音 Cookie 后重试，"
                        "或直接粘贴竞品主页链接手动添加")
@@ -165,6 +167,8 @@ async def discover(body: DiscoverRequest, db: AsyncSession = Depends(get_db)):
                 signature=c.signature[:100],
                 follower_count=c.follower_count,
                 video_hits=c.video_hits,
+                latest_pub_time=c.latest_pub_time,
+                total_plays=c.total_plays,
                 sample_titles=c.sample_titles,
                 homepage_url=c.homepage_url,
             ) for c in candidates

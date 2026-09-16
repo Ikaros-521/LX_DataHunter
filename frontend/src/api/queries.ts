@@ -467,6 +467,7 @@ export interface Competitor {
 export interface DiscoveredCompetitor {
   platform: string; platform_uid: string; nickname: string;
   signature: string; follower_count: number; video_hits: number;
+  latest_pub_time: string; total_plays: number;
   sample_titles: string[]; homepage_url: string;
 }
 
@@ -519,8 +520,8 @@ export function useDeleteCompetitor() {
 
 export function useDiscoverCompetitors() {
   return useMutation({
-    mutationFn: (body: { platform: string; keyword: string; max_items?: number }) =>
-      client.post('/competitors/discover', body, { timeout: 300000 }).then(
+    mutationFn: (body: { platform: string; keyword: string; max_items?: number; max_pages?: number }) =>
+      client.post('/competitors/discover', body, { timeout: 600000 }).then(
         r => r.data as { platform: string; keyword: string; candidates: DiscoveredCompetitor[]; message: string }),
   });
 }

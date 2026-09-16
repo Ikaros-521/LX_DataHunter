@@ -357,7 +357,8 @@ class CompetitorListResponse(BaseModel):
 class DiscoverRequest(BaseModel):
     platform: Platform = Field(default=Platform.BILIBILI, description="发现渠道：bilibili 纯 API；douyin 需登录")
     keyword: str = Field(..., min_length=1, max_length=100)
-    max_items: int = Field(default=20, ge=5, le=60, description="搜索返回的视频条数上限")
+    max_items: int = Field(default=20, ge=5, le=60, description="返回的候选账号数上限")
+    max_pages: int = Field(default=3, ge=1, le=10, description="搜索翻页深度（B站每页42条；抖音控制滚动批数）")
 
 
 class DiscoveredCompetitor(BaseModel):
@@ -368,6 +369,8 @@ class DiscoveredCompetitor(BaseModel):
     signature: str = ""
     follower_count: int = 0
     video_hits: int = 0                 # 搜索结果中该账号出现的视频数
+    latest_pub_time: str = ""           # 命中视频的最新发布日期 YYYY-MM-DD
+    total_plays: int = 0                # 命中视频播放量合计
     sample_titles: list[str] = []       # 命中视频标题样例
     homepage_url: str = ""
 

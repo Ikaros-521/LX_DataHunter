@@ -5,6 +5,7 @@ import {
   Progress, Select, Space, Switch, Table, Tabs, Tag, Tooltip, message,
 } from 'antd';
 import type { Dayjs } from 'dayjs';
+import type { ColumnsType } from 'antd/es/table';
 import {
   useAddCompetitor, useCompetitors, useDeleteCompetitor,
   useDeleteResearch, useDiscoverCompetitors, useResearchList,
@@ -78,8 +79,12 @@ function AddCompetitorModal({ open, onClose }: { open: boolean; onClose: () => v
 function DiscoverModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [platform, setPlatform] = useState('bilibili');
   const [keyword, setKeyword] = useState('');
+  const [maxPages, setMaxPages] = useState(3);
   const [candidates, setCandidates] = useState<DiscoveredCompetitor[]>([]);
   const [selected, setSelected] = useState<React.Key[]>([]);
+  // 筛选条件（客户端过滤）
+  const [minFollowers, setMinFollowers] = useState<number | null>(null);
+  const [activeDays, setActiveDays] = useState<number | null>(null);
   const discover = useDiscoverCompetitors();
   const add = useAddCompetitor();
 
@@ -88,7 +93,9 @@ function DiscoverModal({ open, onClose }: { open: boolean; onClose: () => void }
     setCandidates([]);
     setSelected([]);
     try {
-      const data = await discover.mutateAsync({ platform, keyword: keyword.trim(), max_items: 20 });
+      const data = await discover.mutateAsync({
+        platform, keyword: keyword.trim(), max_items: 30, max_pages: maxPages,
+      });
       setCandidates(data.candidates);
       if (data.message) message.info(data.message);
       if (!data.candidates.length && !data.message) message.warning('未发现候选账号');
@@ -97,8 +104,20 @@ function DiscoverModal({ open, onClose }: { open: boolean; onClose: () => void }
     }
   };
 
+  // 筛选：最少粉丝 + 近 N 天有发布
+  const filtered = candidates.filter(c => {
+    if (minFollowers != null && (c.follower_count || 0) < minFollowers) return false;
+    if (activeDays != null) {
+      if (!c.latest_pub_time) return false;
+      const limit = Date.now() - activeDays * 86400_000;
+      const ts = new Date(c.latest_pub_time).getTime();
+      if (Number.isNaN(ts) || ts < limit) return false;
+    }
+    return true;
+  });
+
   const onAddSelected = async () => {
-    const rows = candidates.filter(c => selected.includes(c.platform_uid));
+    const rows = filtered.filter(c => selected.includes(c.platform_uid));
     if (!rows.length) return;
     let ok = 0;
     for (const r of rows) {
@@ -114,10 +133,44 @@ function DiscoverModal({ open, onClose }: { open: boolean; onClose: () => void }
     setCandidates([]);
     setSelected([]);
     setKeyword('');
+    setMinFollowers(null);
+    setActiveDays(null);
   };
 
+  const columns: ColumnsType<DiscoveredCompetitor> = [
+    { title: '账号', dataIndex: 'nickname', ellipsis: true,
+      sorter: (a, b) => (a.nickname || '').localeCompare(b.nickname || ''),
+      render: (v: string, r) => (
+        <Tooltip title={r.signature || r.homepage_url}>
+          <a href={r.homepage_url} target="_blank" rel="noreferrer">{v || r.platform_uid}</a>
+        </Tooltip>
+      ) },
+    { title: '平台', dataIndex: 'platform', width: 70,
+      filters: [
+        { text: 'B站', value: 'bilibili' },
+        { text: '抖音', value: 'douyin' },
+      ],
+      onFilter: (value, r) => r.platform === value,
+      render: (v: string) => PLATFORM_LABEL[v] || v },
+    { title: '粉丝', dataIndex: 'follower_count', width: 100,
+      sorter: (a, b) => (a.follower_count || 0) - (b.follower_count || 0),
+      defaultSortOrder: 'descend',
+      render: (v: number) => fmtNum(v) },
+    { title: '搜索命中', dataIndex: 'video_hits', width: 90,
+      sorter: (a, b) => a.video_hits - b.video_hits,
+      render: (v: number) => <Badge count={v} color="blue" /> },
+    { title: '最新发布', dataIndex: 'latest_pub_time', width: 110,
+      sorter: (a, b) => (a.latest_pub_time || '').localeCompare(b.latest_pub_time || ''),
+      render: (v: string) => v || '-' },
+    { title: '命中播放', dataIndex: 'total_plays', width: 90,
+      sorter: (a, b) => (a.total_plays || 0) - (b.total_plays || 0),
+      render: (v: number) => fmtNum(v) },
+    { title: '命中视频标题', dataIndex: 'sample_titles', ellipsis: true,
+      render: (v: string[]) => v?.join('；') || '-' },
+  ];
+
   return (
-    <Modal title="关键词发现竞品" open={open} onCancel={onClose} width={860}
+    <Modal title="关键词发现竞品" open={open} onCancel={onClose} width={1000}
       footer={[
         <Button key="cancel" onClick={onClose}>关闭</Button>,
         <Button key="add" type="primary" disabled={!selected.length}
@@ -125,34 +178,44 @@ function DiscoverModal({ open, onClose }: { open: boolean; onClose: () => void }
           添加所选（{selected.length}）
         </Button>,
       ]}>
-      <Space.Compact style={{ width: '100%', marginBottom: 16 }}>
-        <Select value={platform} onChange={setPlatform} style={{ width: 110 }} options={PLATFORM_OPTIONS} />
+      <Space.Compact style={{ width: '100%', marginBottom: 12 }}>
+        <Select value={platform} onChange={setPlatform} style={{ width: 100 }} options={PLATFORM_OPTIONS} />
         <Input placeholder="行业/产品关键词，如：桌面收纳" value={keyword}
           onChange={e => setKeyword(e.target.value)}
           onPressEnter={onSearch} allowClear />
-        <Button type="primary" loading={discover.isPending} onClick={onSearch}>搜索</Button>
+        <Select value={maxPages} onChange={setMaxPages} style={{ width: 130 }}
+          options={[
+            { value: 1, label: '1 页搜索' },
+            { value: 3, label: '3 页搜索' },
+            { value: 5, label: '5 页搜索' },
+            { value: 10, label: '10 页搜索' },
+          ]} />
+        <Button type="primary" loading={discover.isPending} onClick={onSearch}>
+          {discover.isPending ? '搜索中…' : '搜索'}
+        </Button>
       </Space.Compact>
+      {candidates.length > 0 && (
+        <Space style={{ marginBottom: 12 }} size="middle">
+          <span style={{ color: '#888', fontSize: 13 }}>
+            {candidates.length} 个账号（B站每页约 42 条结果，页数越多覆盖越广）
+          </span>
+          <InputNumber placeholder="最少粉丝" min={0} style={{ width: 110 }}
+            value={minFollowers} onChange={v => setMinFollowers(v)} />
+          <Select placeholder="发布时效" allowClear style={{ width: 120 }}
+            value={activeDays} onChange={v => setActiveDays(v)}
+            options={[
+              { value: 7, label: '近 7 天发布' },
+              { value: 30, label: '近 30 天发布' },
+              { value: 90, label: '近 90 天发布' },
+            ]} />
+        </Space>
+      )}
       <Table<DiscoveredCompetitor>
         rowKey="platform_uid" size="small"
-        dataSource={candidates}
+        dataSource={filtered}
         rowSelection={{ selectedRowKeys: selected, onChange: setSelected }}
-        pagination={{ pageSize: 8 }}
-        columns={[
-          { title: '账号', dataIndex: 'nickname', ellipsis: true,
-            render: (v: string, r) => (
-              <Tooltip title={r.signature || r.homepage_url}>
-                <a href={r.homepage_url} target="_blank" rel="noreferrer">{v || r.platform_uid}</a>
-              </Tooltip>
-            ) },
-          { title: '平台', dataIndex: 'platform', width: 70,
-            render: (v: string) => PLATFORM_LABEL[v] || v },
-          { title: '粉丝', dataIndex: 'follower_count', width: 80,
-            render: (v: number) => fmtNum(v) },
-          { title: '搜索命中', dataIndex: 'video_hits', width: 80,
-            render: (v: number) => <Badge count={v} color="blue" /> },
-          { title: '命中视频标题', dataIndex: 'sample_titles', ellipsis: true,
-            render: (v: string[]) => v?.join('；') || '-' },
-        ]}
+        pagination={{ pageSize: 10 }}
+        columns={columns}
       />
     </Modal>
   );
