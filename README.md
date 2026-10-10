@@ -2,6 +2,9 @@
 
 多渠道创作者内容爬取、下载与智能分析平台。支持抖音、B站等主流视频平台，提供创作者监控、定时抓取、视频下载到本地、ASR 语音转写及 LLM 多维分析的一站式工作流。
 
+<img width="3754" height="1860" alt="image" src="https://github.com/user-attachments/assets/b7017be3-2023-4f7e-9496-54584c6539b8" />
+
+
 ## 功能特性
 
 | 模块 | 能力 |
