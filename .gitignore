@@ -1,4 +1,6 @@
-*.json
+# 爬虫输出数据（含作者隐私信息），前端构建配置 JSON 不忽略
+douyin_videos_spider.json
+.claude/settings.local.json
 __pycache__/
 output/
 .douyin_browser_data/
@@ -7,3 +9,9 @@ data.db
 downloads/
 .env
 .zcode/
+docs/superpowers/
+docs/_intro_frames/*.png
+docs/_narration/*.mp3
+docs/screenshots/*.png
+docs/*.mp4
+docs/build_intro_video.py
