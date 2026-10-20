@@ -76,12 +76,25 @@ class FasterWhisperProvider:
         if cls._model is None:
             from faster_whisper import WhisperModel  # 延迟导入，避免未装时影响其它功能
             compute = settings.whisper_compute_type or "auto"
-            cls._model = WhisperModel(
-                settings.whisper_model,
-                device=settings.whisper_device,
-                compute_type=compute,
-                local_files_only=True,  # 只用本地 HF 缓存，禁止联网拉取/核对模型
-            )
+
+            def _build(local_only: bool) -> "WhisperModel":
+                return WhisperModel(
+                    settings.whisper_model,
+                    device=settings.whisper_device,
+                    compute_type=compute,
+                    local_files_only=local_only,
+                )
+
+            try:
+                # 优先本地缓存：命中则零网络请求，不受代理/HF 可达性影响
+                cls._model = _build(True)
+            except Exception as exc:
+                logger.info(
+                    f"whisper model '{settings.whisper_model}' 不在本地缓存"
+                    f"（{exc.__class__.__name__}），回退到从 HF 下载…"
+                )
+                # 缓存缺失才走网络；下载源受 HF_ENDPOINT 环境变量控制（可用 hf-mirror）
+                cls._model = _build(False)
             logger.info(f"whisper model loaded: {settings.whisper_model} on {settings.whisper_device}")
         return cls._model
 
