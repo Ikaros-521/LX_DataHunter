@@ -33,6 +33,11 @@ export interface Content {
   likes: number; comments: number; shares: number; plays: number; collects: number;
   extra_data: Record<string, any>;
   platform: string; creator_nickname: string;
+  // 跨快照匹配的下载/分析状态（按 platform+content_id，null=未下载/未分析）
+  download_task_id?: number | null;
+  download_status?: 'pending' | 'downloading' | 'completed' | 'failed' | null;
+  analysis_id?: number | null;
+  analysis_status?: string | null;
 }
 
 export interface Schedule {
@@ -53,6 +58,7 @@ export interface SingleVideoCrawlResult {
   creator_nickname: string;
   platform: string;
   video_id: string;
+  content_snapshot_id: number;
   content: {
     title: string; cover_url: string; url: string;
     duration_sec: number; create_time: string | null;
@@ -153,6 +159,13 @@ export function useContents(params?: Record<string, any>) {
   return useQuery<PaginatedResponse<Content>>({
     queryKey: ['contents', params],
     queryFn: () => client.get('/contents', { params }).then(r => r.data),
+    // 有下载中/分析中的内容时自动轮询，状态列实时更新
+    refetchInterval: (query) => {
+      const items = query.state.data?.items || [];
+      const dlActive = items.some(i => i.download_status === 'downloading' || i.download_status === 'pending');
+      const anActive = items.some(i => i.analysis_status && ['pending', 'extracting', 'transcribing', 'analyzing'].includes(i.analysis_status));
+      return dlActive || anActive ? 3000 : false;
+    },
   });
 }
 

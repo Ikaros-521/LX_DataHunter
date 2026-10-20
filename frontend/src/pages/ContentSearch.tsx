@@ -1,13 +1,16 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Input, Select, DatePicker, Space, Button, Popconfirm, message } from 'antd';
 import { SearchOutlined, ExportOutlined, DownloadOutlined } from '@ant-design/icons';
 import ContentTable from '../components/ContentTable';
-import { useContents, useCreators, usePlatforms, useBatchDownload } from '../api/queries';
+import { useContents, useCreators, usePlatforms, useBatchDownload, useRetryDownload, useCreateAnalysis } from '../api/queries';
+import type { Content } from '../api/queries';
 import dayjs from 'dayjs';
 
 const { RangePicker } = DatePicker;
 
 export default function ContentSearch() {
+  const navigate = useNavigate();
   const [keyword, setKeyword] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
   const [platform, setPlatform] = useState<string | undefined>();
@@ -17,6 +20,9 @@ export default function ContentSearch() {
   const [dateRange, setDateRange] = useState<[string, string] | null>(null);
   const [page, setPage] = useState(1);
   const [selectedRowKeys, setSelectedRowKeys] = useState<number[]>([]);
+  // 行内操作 loading（下载/分析各只标一条）
+  const [downloadingId, setDownloadingId] = useState<number | null>(null);
+  const [analyzingId, setAnalyzingId] = useState<number | null>(null);
 
   const params: Record<string, any> = {
     page, page_size: 20, sort, order: 'desc',
@@ -31,6 +37,47 @@ export default function ContentSearch() {
   const { data: creatorsData } = useCreators({ page_size: 200 });
   const { data: platforms } = usePlatforms();
   const batchDownloadMut = useBatchDownload();
+  const retryDownloadMut = useRetryDownload();
+  const createAnalysisMut = useCreateAnalysis();
+
+  // ---- 行内操作：下载 / 重试 / 分析 / 看分析（复用已下载文件，不重复下载）----
+
+  const handleDownload = (r: Content) => {
+    setDownloadingId(r.id);
+    batchDownloadMut.mutate([r.id], {
+      onSuccess: (res: any) => {
+        const d = res.data || {};
+        if (d.created > 0) message.success(`「${r.title || r.content_id}」已加入下载队列`);
+        else message.info('该视频已在下载队列或已下载，无需重复下载');
+      },
+      onSettled: () => setDownloadingId(null),
+    });
+  };
+
+  const handleRetryDownload = (r: Content) => {
+    if (!r.download_task_id) return;
+    setDownloadingId(r.id);
+    retryDownloadMut.mutate(r.download_task_id, {
+      onSuccess: () => message.success(`「${r.title || r.content_id}」已重新入队`),
+      onSettled: () => setDownloadingId(null),
+    });
+  };
+
+  const handleAnalyze = (r: Content) => {
+    if (!r.download_task_id) return;
+    setAnalyzingId(r.id);
+    createAnalysisMut.mutate({ download_task_id: r.download_task_id }, {
+      onSuccess: (res: any) => {
+        message.success('分析任务已创建');
+        navigate(`/analysis/${res.data.id}`);
+      },
+      onSettled: () => setAnalyzingId(null),
+    });
+  };
+
+  const handleViewAnalysis = (r: Content) => {
+    if (r.analysis_id) navigate(`/analysis/${r.analysis_id}`);
+  };
 
   const handleSearch = () => {
     setSearchKeyword(keyword);
@@ -151,6 +198,12 @@ export default function ContentSearch() {
           selectedRowKeys,
           onChange: (keys) => setSelectedRowKeys(keys as number[]),
         }}
+        onDownload={handleDownload}
+        onRetryDownload={handleRetryDownload}
+        onAnalyze={handleAnalyze}
+        onViewAnalysis={handleViewAnalysis}
+        downloadingId={downloadingId}
+        analyzingId={analyzingId}
       />
     </div>
   );

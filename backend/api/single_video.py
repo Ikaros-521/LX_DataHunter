@@ -106,7 +106,7 @@ async def crawl_by_url(body: SingleVideoCrawlRequest, db: AsyncSession = Depends
     db.add(session)
     await db.flush()
 
-    db.add(ContentSnapshot(
+    snapshot = ContentSnapshot(
         session_id=session.id,
         content_id=item.content_id,
         content_type=item.content_type.value,
@@ -123,7 +123,9 @@ async def crawl_by_url(body: SingleVideoCrawlRequest, db: AsyncSession = Depends
         plays=item.plays,
         collects=item.collects,
         extra_data=item.extra_data,
-    ))
+    )
+    db.add(snapshot)
+    await db.flush()
 
     session.status = SessionStatus.COMPLETED.value
     session.finished_at = beijing_now()
@@ -145,6 +147,7 @@ async def crawl_by_url(body: SingleVideoCrawlRequest, db: AsyncSession = Depends
         "creator_nickname": creator.nickname,
         "platform": platform.value,
         "video_id": item.content_id,
+        "content_snapshot_id": snapshot.id,
         "content": {
             "title": item.title,
             "cover_url": item.cover_url,

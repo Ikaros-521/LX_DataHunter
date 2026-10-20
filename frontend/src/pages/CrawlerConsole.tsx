@@ -1,9 +1,9 @@
 import { useState, useMemo } from 'react';
-import { Row, Col, Table, Select, Button, Space, Tag, message, InputNumber, Popconfirm, Input, Card } from 'antd';
+import { Row, Col, Table, Select, Button, Space, Tag, message, InputNumber, Popconfirm, Input, Card, Checkbox } from 'antd';
 import { ThunderboltOutlined, DeleteOutlined, ClearOutlined, SearchOutlined, LinkOutlined } from '@ant-design/icons';
 import CrawlProgress from '../components/CrawlProgress';
 import PlatformTag from '../components/PlatformTag';
-import { useCreators, useSessions, useTriggerCrawl, useDeleteSession, useClearAllSessions, useBatchDeleteSessions, useCrawlSingleVideo } from '../api/queries';
+import { useCreators, useSessions, useTriggerCrawl, useDeleteSession, useClearAllSessions, useBatchDeleteSessions, useCrawlSingleVideo, useBatchDownload } from '../api/queries';
 import { useCrawlProgress } from '../hooks/useCrawlProgress';
 import dayjs from 'dayjs';
 import type { Session } from '../api/queries';
@@ -72,7 +72,9 @@ export default function CrawlerConsole() {
 
   // 单视频链接爬取
   const [videoUrl, setVideoUrl] = useState('');
+  const [autoDownload, setAutoDownload] = useState(true);
   const crawlVideoMut = useCrawlSingleVideo();
+  const batchDownloadMut = useBatchDownload();
 
   const handleCrawlVideo = () => {
     const url = videoUrl.trim();
@@ -83,13 +85,27 @@ export default function CrawlerConsole() {
     crawlVideoMut.mutate(url, {
       onSuccess: (res) => {
         const c = res.content;
-        message.success(
+        const base =
           `已入库「${c.title || res.video_id}」` +
-          ` · 点赞 ${c.likes.toLocaleString()} / 评论 ${c.comments.toLocaleString()}` +
-          (res.creator_new ? `，作者「${res.creator_nickname}」已自动加入创作者列表` : ''),
-          6,
-        );
-        setVideoUrl('');
+          ` · 点赞 ${c.likes.toLocaleString()} / 评论 ${c.comments.toLocaleString()}`;
+        const authorNote = res.creator_new
+          ? `，作者「${res.creator_nickname}」已自动加入创作者列表`
+          : '';
+        const done = (suffix: string) => {
+          message.success(base + suffix + authorNote, 6);
+          setVideoUrl('');
+        };
+        if (autoDownload) {
+          batchDownloadMut.mutate([res.content_snapshot_id], {
+            onSuccess: () => done('，已加入下载队列'),
+            onError: () => {
+              message.warning('已入库，但加入下载队列失败，可在内容检索中手动下载', 6);
+              setVideoUrl('');
+            },
+          });
+        } else {
+          done('');
+        }
       },
     });
   };
@@ -185,6 +201,14 @@ export default function CrawlerConsole() {
                 {crawlVideoMut.isPending ? '抓取中…' : '爬取该视频'}
               </Button>
             </Space.Compact>
+            <div style={{ marginTop: 8 }}>
+              <Checkbox
+                checked={autoDownload}
+                onChange={e => setAutoDownload(e.target.checked)}
+              >
+                爬取后自动加入下载队列
+              </Checkbox>
+            </div>
           </Card>
         </Col>
       </Row>

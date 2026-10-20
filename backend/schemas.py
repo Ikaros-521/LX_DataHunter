@@ -78,6 +78,11 @@ class ContentResponse(BaseModel):
     extra_data: dict = {}
     platform: str = ""
     creator_nickname: str = ""
+    # 下载/分析状态（跨快照按 platform+content_id 匹配，None=尚未下载/分析）
+    download_task_id: Optional[int] = None
+    download_status: Optional[str] = None   # pending/downloading/completed/failed
+    analysis_id: Optional[int] = None
+    analysis_status: Optional[str] = None   # pending/extracting/transcribing/analyzing/completed/failed
 
     model_config = {"from_attributes": True}
 

@@ -80,7 +80,7 @@ async def batch_create_downloads(
     rows = result.all()  # list of (ContentSnapshot, platform)
     snapshot_map: dict[int, tuple[ContentSnapshot, str]] = {r[0].id: (r[0], r[1]) for r in rows}
 
-    # 查询已有任务
+    # 查询已有任务（按快照 id：本快照已有任务直接跳过）
     existing_result = await db.execute(
         select(DownloadTask.content_snapshot_id).where(
             DownloadTask.content_snapshot_id.in_(body.content_ids),
@@ -92,6 +92,28 @@ async def batch_create_downloads(
         )
     )
     existing_ids = set(existing_result.scalars().all())
+
+    # 跨快照去重：同一视频（platform + content_id）被多次爬取会产生多份快照，
+    # 任意一份已有 排队/下载中/已完成 任务时，其余快照复用该任务/文件，不再重复下载
+    pairs = {
+        (platform, snap.content_id)
+        for snap, platform in snapshot_map.values()
+        if snap.content_type == "video"
+    }
+    reused_existing = set()
+    if pairs:
+        from sqlalchemy import tuple_
+        dup_result = await db.execute(
+            select(DownloadTask.platform, DownloadTask.content_id).where(
+                tuple_(DownloadTask.platform, DownloadTask.content_id).in_(pairs),
+                DownloadTask.status.in_([
+                    DownloadStatus.PENDING.value,
+                    DownloadStatus.DOWNLOADING.value,
+                    DownloadStatus.COMPLETED.value,
+                ]),
+            )
+        )
+        reused_existing = set(dup_result.all())
 
     created = 0
     skipped = 0
@@ -107,6 +129,9 @@ async def batch_create_downloads(
             skipped += 1
             continue
         if cid in existing_ids:
+            skipped += 1
+            continue
+        if (platform or "unknown", snapshot.content_id) in reused_existing:
             skipped += 1
             continue
 
@@ -130,7 +155,10 @@ async def batch_create_downloads(
 
     logger.info(f"Batch download: created={created}, skipped={skipped}")
     return {
-        "message": f"已创建 {created} 个下载任务",
+        "message": (
+            f"已创建 {created} 个下载任务，跳过 {skipped} 个（已下载/下载中/非视频）"
+            if skipped else f"已创建 {created} 个下载任务"
+        ),
         "created": created,
         "skipped": skipped,
     }
