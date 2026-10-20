@@ -1,9 +1,9 @@
 import { useState, useMemo } from 'react';
-import { Row, Col, Table, Select, Button, Space, Tag, message, InputNumber, Popconfirm, Input } from 'antd';
-import { ThunderboltOutlined, DeleteOutlined, ClearOutlined, SearchOutlined } from '@ant-design/icons';
+import { Row, Col, Table, Select, Button, Space, Tag, message, InputNumber, Popconfirm, Input, Card } from 'antd';
+import { ThunderboltOutlined, DeleteOutlined, ClearOutlined, SearchOutlined, LinkOutlined } from '@ant-design/icons';
 import CrawlProgress from '../components/CrawlProgress';
 import PlatformTag from '../components/PlatformTag';
-import { useCreators, useSessions, useTriggerCrawl, useDeleteSession, useClearAllSessions, useBatchDeleteSessions } from '../api/queries';
+import { useCreators, useSessions, useTriggerCrawl, useDeleteSession, useClearAllSessions, useBatchDeleteSessions, useCrawlSingleVideo } from '../api/queries';
 import { useCrawlProgress } from '../hooks/useCrawlProgress';
 import dayjs from 'dayjs';
 import type { Session } from '../api/queries';
@@ -69,6 +69,30 @@ export default function CrawlerConsole() {
   const progress = useCrawlProgress(watchingSession);
 
   const [maxItems, setMaxItems] = useState(50);
+
+  // 单视频链接爬取
+  const [videoUrl, setVideoUrl] = useState('');
+  const crawlVideoMut = useCrawlSingleVideo();
+
+  const handleCrawlVideo = () => {
+    const url = videoUrl.trim();
+    if (!url) {
+      message.warning('请粘贴视频链接');
+      return;
+    }
+    crawlVideoMut.mutate(url, {
+      onSuccess: (res) => {
+        const c = res.content;
+        message.success(
+          `已入库「${c.title || res.video_id}」` +
+          ` · 点赞 ${c.likes.toLocaleString()} / 评论 ${c.comments.toLocaleString()}` +
+          (res.creator_new ? `，作者「${res.creator_nickname}」已自动加入创作者列表` : ''),
+          6,
+        );
+        setVideoUrl('');
+      },
+    });
+  };
 
   const handleTrigger = () => {
     if (!selectedCreator) {
@@ -137,6 +161,34 @@ export default function CrawlerConsole() {
 
   return (
     <div>
+      <Row gutter={[16, 16]}>
+        <Col span={24}>
+          <Card
+            size="small"
+            title={<Space><LinkOutlined />单视频链接爬取</Space>}
+            extra={<span style={{ color: '#999', fontSize: 12 }}>支持 B站 / 抖音视频页链接及分享短链，视频作者会自动登记为创作者</span>}
+          >
+            <Space.Compact style={{ width: '100%', maxWidth: 760 }}>
+              <Input
+                placeholder="粘贴视频链接，如 https://www.bilibili.com/video/BVxxx 或 https://v.douyin.com/xxx"
+                value={videoUrl}
+                onChange={e => setVideoUrl(e.target.value)}
+                onPressEnter={handleCrawlVideo}
+                allowClear
+                disabled={crawlVideoMut.isPending}
+              />
+              <Button
+                type="primary"
+                loading={crawlVideoMut.isPending}
+                onClick={handleCrawlVideo}
+              >
+                {crawlVideoMut.isPending ? '抓取中…' : '爬取该视频'}
+              </Button>
+            </Space.Compact>
+          </Card>
+        </Col>
+      </Row>
+
       <Row gutter={[16, 16]}>
         <Col xs={24} md={12}>
           <Space>

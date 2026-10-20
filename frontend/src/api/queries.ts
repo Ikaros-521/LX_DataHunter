@@ -45,6 +45,35 @@ export interface PaginatedResponse<T> {
   total: number; items: T[];
 }
 
+// ---- 单视频链接爬取 ----
+export interface SingleVideoCrawlResult {
+  session_id: number;
+  creator_id: number;
+  creator_new: boolean;
+  creator_nickname: string;
+  platform: string;
+  video_id: string;
+  content: {
+    title: string; cover_url: string; url: string;
+    duration_sec: number; create_time: string | null;
+    likes: number; comments: number; shares: number; plays: number; collects: number;
+  };
+}
+
+export function useCrawlSingleVideo() {
+  const qc = useQueryClient();
+  return useMutation({
+    // 抖音路径要起浏览器，放宽超时
+    mutationFn: (url: string) =>
+      client.post('/single-video/crawl', { url }, { timeout: 180000 }).then(r => r.data as SingleVideoCrawlResult),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['sessions'] });
+      qc.invalidateQueries({ queryKey: ['contents'] });
+      qc.invalidateQueries({ queryKey: ['creators'] });
+    },
+  });
+}
+
 // ---- Download ----
 export interface DownloadTask {
   id: number; content_snapshot_id: number;

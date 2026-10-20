@@ -27,6 +27,7 @@ from .api.schedules import router as schedules_router
 from .api.ws import router as ws_router
 from .api.credentials import router as credentials_router
 from .api.hot import router as hot_router
+from .api.single_video import router as single_video_router
 from .api.downloads import router as downloads_router
 from .api.download_ws import router as download_ws_router
 from .api.analysis import router as analysis_router
@@ -256,6 +257,7 @@ app.include_router(schedules_router)
 app.include_router(ws_router)
 app.include_router(credentials_router)
 app.include_router(hot_router)
+app.include_router(single_video_router)
 app.include_router(downloads_router)
 app.include_router(download_ws_router)
 app.include_router(analysis_router)
