@@ -80,6 +80,7 @@ class FasterWhisperProvider:
                 settings.whisper_model,
                 device=settings.whisper_device,
                 compute_type=compute,
+                local_files_only=True,  # 只用本地 HF 缓存，禁止联网拉取/核对模型
             )
             logger.info(f"whisper model loaded: {settings.whisper_model} on {settings.whisper_device}")
         return cls._model

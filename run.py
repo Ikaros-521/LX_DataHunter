@@ -19,6 +19,11 @@
 """
 import sys
 import asyncio
+import os
+
+# HuggingFace 模型全部走本地缓存（ASR 等），禁止 huggingface_hub 发起任何网络请求。
+# 必须在任何 huggingface_hub 导入之前设置。若某模型缓存缺失，会直接报错而非尝试下载。
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 # 必须在导入 uvicorn / 任何 asyncio loop 之前设置，对 Windows 生效
 if sys.platform == "win32":
